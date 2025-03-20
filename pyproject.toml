@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "crsa"
+version = "0.0.1"
+authors = [
+  { name="Lautaro Estienne", email="lautaro.estienne@universite-paris-saclay.fr" },
+  { name="Gabriel Ben Zenou", email="gabriel.benzenou@student-cs.fr" },
+]
+description = "Collaborative Rational Speech Acts model."
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/LautaroEst/crsa"
+Issues = "https://github.com/LautaroEst/crsa/issues"
