@@ -1,0 +1,19 @@
+
+meanings: ["David Lewis", "Paul Grice", "Claude Shannon"]
+
+utterances: ["beard", "glasses", "tie"]
+
+lexicon: [
+  [1, 0, 0],
+  [1, 1, 0],
+  [0, 1, 1]
+]
+
+prior: null
+
+cost: null
+
+alpha: 1.0
+
+depth: 5
+

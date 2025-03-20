@@ -5,15 +5,12 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "RSA: default",
+            "name": "Test: RSA",
             "type": "debugpy",
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
             "request": "launch",
-            "module": "crsa.scripts.run_rsa",
-            "args": [
-                "rsa/default"
-            ]
+            "module": "crsa.tests.rsa"
         }
     ]
 }
