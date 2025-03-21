@@ -2,8 +2,10 @@
 from pathlib import Path
 import sys
 import numpy as np
-from typing import List
+from typing import List, Union
 import shutil
+import logging
+import time
 
 from ..src.rsa import RSA
 from ..src.utils import read_config_file
@@ -15,17 +17,71 @@ def main(
     lexicon: List[List[int]],
     prior: List[float],
     cost: List[float],
-    alpha: float = 1.,
-    depth: int = 2,
+    alphas: Union[int,float,List[float]] = [],
+    depths: Union[int,List[Union[List[int],int]]] = [[]],
     output_dir: Path = Path("outputs"),
     verbose: bool = False
 ):
-    # Run RSA
-    rsa = RSA(meanings, utterances, lexicon, prior, cost, alpha, depth)
-    rsa.run(output_dir, verbose)
+    
+    # Configure logging
+    logger = logging.getLogger(__name__)
+    console = logging.StreamHandler()
+    logger.addHandler(console)
+    now = time.strftime("%Y-%m-%d-%H-%M-%S")
+    file_handler = logging.FileHandler(output_dir / f"{now}.log", mode="w", encoding="utf-8")
+    file_handler.setFormatter(
+        logging.Formatter(
+            "{asctime} - {levelname} - {message}",
+            style="{",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        )
+    )
+    logger.addHandler(file_handler)
+    logger.setLevel(logging.INFO)
 
-    # Save history
-    np.save(output_dir / "history.npy", rsa.history)
+    # Validate alphas and depths
+    if isinstance(alphas, float) or isinstance(alphas, int):
+        alphas = [alphas]
+    elif isinstance(alphas, list):
+        if isinstance(depths, list) and len(alphas) != len(depths):
+            raise ValueError("Alphas and depths must have the same length")
+    else:
+        raise ValueError("Alphas must be a number or a list of numbers")
+    if isinstance(depths, int):
+        depths = [depths]
+        if len(alphas) != len(depths):
+            raise ValueError("Alphas and depths must have the same length")
+    elif not isinstance(depths, list):
+        raise ValueError("Depth must be an integer or a list of integers")
+
+    # Run RSA for each alpha and depth
+    for alpha, alphas_depths in zip(alphas, depths):
+
+        # Check if depth is a list
+        if isinstance(alphas_depths, int):
+            alphas_depths = [alphas_depths]
+        elif not isinstance(alphas_depths, list):
+            raise ValueError("Depth must be an integer or a list of integers")
+        
+        for depth in alphas_depths:
+
+            # Create output directory
+            suboutput_dir = output_dir / f"alpha={float(alpha)}" / f"depth={depth}"
+            if suboutput_dir.exists():
+                logger.warning(f"Experiment already run for alpha={alpha} and depth={depth}. Skipping.")
+                continue
+            else:
+                logger.info(f"Running experiment for alpha={alpha} and depth={depth}")
+            suboutput_dir.mkdir(parents=True, exist_ok=True)
+
+            # Run RSA
+            rsa = RSA(meanings, utterances, lexicon, prior, cost, alpha, depth)
+            rsa.run(suboutput_dir, verbose)
+
+    # Close logging
+    for handler in logger.handlers:
+        handler.close()
+        logger.removeHandler(handler)
 
 
 def setup():

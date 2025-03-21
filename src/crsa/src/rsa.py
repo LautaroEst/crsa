@@ -197,6 +197,14 @@ class RSA:
             logger.info(f"Pragmatic listener at step {i+1}:\n{self.listener.df}")
             logger.info("\n" + "-" * 40 + "\n")
 
+        # Save history
+        np.save(output_dir / "history.npy", self.history)
+
+        # Close logging
+        for handler in logger.handlers:
+            handler.close()
+            logger.removeHandler(handler)
+
     @property
     def history(self):
         return [{
