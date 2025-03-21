@@ -7,9 +7,6 @@ def read_config_file(config_file):
     """
     Read the configuration file and return the configuration dictionary
     """
-
-    
-
     with open(f"configs/{config_file}.yaml") as f:
         config = yaml.safe_load(f)
 

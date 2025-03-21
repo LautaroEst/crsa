@@ -1,7 +1,6 @@
 
 from pathlib import Path
 import sys
-import numpy as np
 from typing import List, Union
 import shutil
 import logging
@@ -17,8 +16,9 @@ def main(
     lexicon: List[List[int]],
     prior: List[float],
     cost: List[float],
-    alphas: Union[int,float,List[float]] = [],
-    depths: Union[int,List[Union[List[int],int]]] = [[]],
+    alphas: List[float] = [1.0],
+    max_depths: List[List[Union[int,None]]] = [[None]],
+    tolerances: List[List[Union[float,None]]] = [[None]],
     output_dir: Path = Path("outputs"),
     verbose: bool = False
 ):
@@ -39,43 +39,26 @@ def main(
     logger.addHandler(file_handler)
     logger.setLevel(logging.INFO)
 
-    # Validate alphas and depths
-    if isinstance(alphas, float) or isinstance(alphas, int):
-        alphas = [alphas]
-    elif isinstance(alphas, list):
-        if isinstance(depths, list) and len(alphas) != len(depths):
-            raise ValueError("Alphas and depths must have the same length")
-    else:
-        raise ValueError("Alphas must be a number or a list of numbers")
-    if isinstance(depths, int):
-        depths = [depths]
-        if len(alphas) != len(depths):
-            raise ValueError("Alphas and depths must have the same length")
-    elif not isinstance(depths, list):
-        raise ValueError("Depth must be an integer or a list of integers")
-
     # Run RSA for each alpha and depth
-    for alpha, alphas_depths in zip(alphas, depths):
+    for alpha, alphas_max_depths, alphas_tolerances in zip(alphas, max_depths, tolerances):
+        alpha = float(alpha)
 
-        # Check if depth is a list
-        if isinstance(alphas_depths, int):
-            alphas_depths = [alphas_depths]
-        elif not isinstance(alphas_depths, list):
-            raise ValueError("Depth must be an integer or a list of integers")
-        
-        for depth in alphas_depths:
+        for max_depth, tolerance in zip(alphas_max_depths, alphas_tolerances):
+
+            max_depth = None if max_depth is None else int(max_depth)
+            tolerance = None if tolerance is None else float(tolerance)
 
             # Create output directory
-            suboutput_dir = output_dir / f"alpha={float(alpha)}" / f"depth={depth}"
+            suboutput_dir = output_dir / f"alpha={alpha}" / f"max_depth={max_depth}_tolerance={tolerance}"
             if suboutput_dir.exists():
-                logger.warning(f"Experiment already run for alpha={alpha} and depth={depth}. Skipping.")
+                logger.warning(f"Experiment already run for alpha={alpha}, max_depth={max_depth} and tolerance={tolerance}. Skipping.")
                 continue
             else:
-                logger.info(f"Running experiment for alpha={alpha} and depth={depth}")
+                logger.info(f"Running experiment for alpha={alpha}, max_depth={max_depth} and tolerance={tolerance}.")
             suboutput_dir.mkdir(parents=True, exist_ok=True)
 
             # Run RSA
-            rsa = RSA(meanings, utterances, lexicon, prior, cost, alpha, depth)
+            rsa = RSA(meanings, utterances, lexicon, prior, cost, alpha, max_depth, tolerance)
             rsa.run(suboutput_dir, verbose)
 
     # Close logging

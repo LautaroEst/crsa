@@ -15,5 +15,7 @@ cost: null
 
 alphas: [1.0, 1.0, 1]
 
-depths: [3, [10, 20, 30], 10]
+max_depths: [[3], [10, 20, 30], [10]]
+
+tolerances: [[null], [null, null, null], [null]]
 

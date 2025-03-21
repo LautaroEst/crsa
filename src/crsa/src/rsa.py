@@ -7,7 +7,6 @@ import pandas as pd
 
 from ..src.utils import is_list_of_strings, is_numeric_ndarray, is_list_of_numbers, is_positive_number, is_positive_integer, is_list_of_list_of_numbers
 
-
 class Listener:
 
     def __init__(self, meanings, utterances, prior, lexicon):
@@ -75,6 +74,95 @@ class Speaker:
         return self.history[-1]
 
 
+class RSAGain:
+
+    def __init__(self):
+        self.cond_entropy_history = []
+        self.listener_value_history = []
+        self.gain_history = []
+
+    def H_S_of_U_given_M(self, prior, speaker):
+        """
+        Compute the conditional mutual information of the utterances given the meanings.
+
+        Parameters
+        ----------
+        prior : np.array (M,)
+            The prior probability of each meaning.
+        speaker : np.array (M,U)
+            The speaker probability of each meaning given each utterance.
+
+        """
+        mask = speaker > 0
+        log_speaker = np.zeros_like(speaker) # approximate x * log(x) to 0
+        log_speaker[mask] = np.log(speaker[mask]) 
+        cond_entropy = -np.sum(speaker * prior.reshape(-1,1) * log_speaker)
+        self.cond_entropy_history.append(cond_entropy)
+        return cond_entropy
+
+    def expected_V_L_over_S(self, listener, speaker, prior, cost):
+        """
+        Compute the expected value of the listener over the speaker.
+
+        Parameters
+        ----------
+        listener : np.array (U,M)
+            The listener probability of each meaning given each utterance.
+        speaker : np.array (M,U)
+            The speaker probability of each meaning given each utterance.
+        prior : np.array (M,)
+            The prior probability of each meaning.
+        cost : np.array (U,)
+            The cost of each utterance.
+        """
+        joint_speaker = speaker * prior.reshape(-1,1)
+        log_listener = np.zeros_like(listener)
+        mask = listener > 0
+        log_listener[mask] = np.log(listener[mask])
+        log_listener[~mask] = -np.inf
+        V_L = log_listener - cost.reshape(-1,1)
+        pre_expected_V_L = np.zeros_like(joint_speaker.T)
+        mask = (joint_speaker.T > 0) & (V_L != -np.inf)
+        pre_expected_V_L[mask] = joint_speaker.T[mask] * V_L[mask]
+        expected_V_L = np.sum(pre_expected_V_L)
+        self.listener_value_history.append(expected_V_L)
+        return expected_V_L
+    
+    def compute_gain(self, listener, speaker, prior, cost, alpha):
+        """
+        Compute the gain function.
+
+        Parameters
+        ----------
+        listener : np.array (U,M)
+            The listener probability of each meaning given each utterance.
+        speaker : np.array (M,U)
+            The speaker probability of each meaning given each utterance.
+        prior : np.array (M,)
+            The prior probability of each meaning.
+        cost : np.array (U,)
+            The cost of each utterance.
+        alpha : float
+            The rationality parameter.
+        """
+        gain = alpha * self.expected_V_L_over_S(listener, speaker, prior, cost) + self.H_S_of_U_given_M(prior, speaker)
+        self.gain_history.append(gain)
+        return gain
+    
+    def get_diff(self):
+        if len(self.gain_history) < 2:
+            return float("inf")
+        return abs(self.gain_history[-1] - self.gain_history[-2])
+    
+    def save(self, path):
+        np.save(path, {
+            "cond_entropy": np.asarray(self.cond_entropy_history),
+            "listener_value": np.asarray(self.listener_value_history),
+            "gain": np.asarray(self.gain_history)
+        })
+
+
+
 class RSA:
     """
     Rational Speech Act (RSA) model from the listener's perspective
@@ -93,9 +181,13 @@ class RSA:
         Cost of utterances. If None, uniform cost (zero) is assumed.
     alpha : Optional[float]
         Rationality parameter
+    max_depth : Optional[int]
+        Maximum depth of the model (number of iterations)
+    tolerance : Optional[float]
+        Tolerance for convergence
     """
 
-    def __init__(self, meanings, utterances, lexicon, prior=None, cost=None, alpha=1., depth=10):
+    def __init__(self, meanings, utterances, lexicon, prior=None, cost=None, alpha=1., max_depth=None, tolerance=1e-6):
 
         # Check meanings and utterances
         if not is_list_of_strings(meanings):
@@ -139,10 +231,15 @@ class RSA:
             raise ValueError("alpha should be a positive number")
         self.alpha = float(alpha)
 
-        # Check depth
-        if not is_positive_integer(depth):
-            raise ValueError("depth should be a positive integer")
-        self.depth = depth
+        # Check max_depth and tolerance
+        if not is_positive_integer(max_depth) and max_depth is not None:
+            raise ValueError("depth should be a positive integer or None")
+        if not is_positive_number(tolerance) and tolerance is not None:
+            raise ValueError("tolerance should be a positive number or None")
+        if max_depth is None and tolerance is None:
+            raise ValueError("Either max_depth or tolerance should be provided")
+        self.max_depth = max_depth if max_depth is not None else float("inf")
+        self.tolerance = tolerance if tolerance is not None else 0
 
 
     def run(self, output_dir: Path, verbose: bool = False):
@@ -170,7 +267,7 @@ class RSA:
         logger.setLevel(logging.INFO)
 
         # Log configuration
-        logger.info(f"Running RSA model for depth {self.depth}\n")
+        logger.info(f"Running RSA model for max depth {self.max_depth} and tolerance {self.tolerance:.2e}")
         logger.info("-" * 40)
         logger.info(
             f"\nLexicon:\n\n{pd.DataFrame(self.lexicon, index=self.utterances, columns=self.meanings)}\n\n"
@@ -183,22 +280,33 @@ class RSA:
         # Init listener and speaker
         self.listener = Listener(self.meanings, self.utterances, self.prior, self.lexicon)
         self.speaker = Speaker(self.meanings, self.utterances, self.cost, self.alpha)
+        self.gain = RSAGain()
         logger.info(f"Literal listener:\n{self.listener.literal_listener}\n")
         logger.info("-" * 40 + "\n")
 
         # Run the model for the given number of iterations
-        for i in range(self.depth):
+        i = 0
+        while i < self.max_depth:
             # Update speaker
             self.speaker.update(self.listener.value)
             logger.info(f"Pragmatic speaker at step {i+1}:\n{self.speaker.df}\n")
             
             # Update listener
             self.listener.update(self.speaker.value)
-            logger.info(f"Pragmatic listener at step {i+1}:\n{self.listener.df}")
+            logger.info(f"Pragmatic listener at step {i+1}:\n{self.listener.df}\n")
+
+            # Check for convergence
+            gain = self.gain.compute_gain(self.listener.value, self.speaker.value, self.prior, self.cost, self.alpha)
+            logger.info(f"Gain at step {i+1}: {gain:.6e}")
             logger.info("\n" + "-" * 40 + "\n")
+            if self.gain.get_diff() <= self.tolerance:
+                logger.info(f"Converged after {i+1} iterations")
+                break
+            i += 1
 
         # Save history
         np.save(output_dir / "history.npy", self.history)
+        self.gain.save(output_dir / "gain.npy")
 
         # Close logging
         for handler in logger.handlers:
