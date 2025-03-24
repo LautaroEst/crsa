@@ -2,6 +2,10 @@ import sys
 import yaml
 import numpy as np
 
+def save_yaml(data, file_path):
+    with open(file_path, "w") as f:
+        yaml.safe_dump(data, f, default_flow_style=True)
+
 
 def read_config_file(config_file):
     """

@@ -1,11 +1,17 @@
-#!/bin/bash -ex
+#!/bin/bash -e
 
 # Source the Conda initialization script
 source ~/anaconda3/etc/profile.d/conda.sh
 conda activate crsa
 
 # Experiments
-python -m crsa.scripts.run_rsa rsa/default
+python -m crsa.scripts.rsa no_structural_zeros \
+    --alphas 0.1 0.5 1.0 2.0 \
+    --max_depths 100 100 100 100
+
+python -m crsa.scripts.rsa_alphas no_structural_zeros \
+    --alphas 0.1 0.5 1.0 2.0 \
+    --max_depths 100 100 100 100
 
 # Finish
 conda deactivate

@@ -4,8 +4,19 @@ import numpy as np
 from scipy.special import softmax
 import logging
 import pandas as pd
+import yaml
+import pickle
 
-from ..src.utils import is_list_of_strings, is_numeric_ndarray, is_list_of_numbers, is_positive_number, is_positive_integer, is_list_of_list_of_numbers
+from ..src.utils import (
+    is_list_of_strings, 
+    is_numeric_ndarray, 
+    is_list_of_numbers, 
+    is_positive_number, 
+    is_positive_integer, 
+    is_list_of_list_of_numbers,
+    save_yaml
+)
+
 
 class Listener:
 
@@ -28,16 +39,18 @@ class Listener:
         pragmatic_listener = pragmatic_listener / pragmatic_listener.sum(axis=0)
         self.history.append(pragmatic_listener.T)
 
-    @property
-    def literal_listener(self):
+    def get_literal_as_df(self):
         return pd.DataFrame(self.history[0], index=self.utterances, columns=self.meanings)
+    
+    def get_literal_as_array(self):
+        return self.history[0]
       
     @property
-    def df(self):
-        return pd.DataFrame(self.value, index=self.utterances, columns=self.meanings)
+    def as_df(self):
+        return pd.DataFrame(self.as_array, index=self.utterances, columns=self.meanings)
     
     @property
-    def value(self):
+    def as_array(self):
         return self.history[-1]
     
 
@@ -48,7 +61,9 @@ class Speaker:
         self.utterances = utterances
         self.cost = cost
         self.alpha = alpha
-        self.history = [None]
+
+        literal_speaker = np.ones((len(meanings), len(utterances))) * np.nan
+        self.history = [literal_speaker]
 
     def update(self, listener):
         """
@@ -66,11 +81,11 @@ class Speaker:
         self.history.append(pragmatic_speaker)
 
     @property
-    def df(self):
-        return pd.DataFrame(self.value, index=self.meanings, columns=self.utterances)
+    def as_df(self):
+        return pd.DataFrame(self.as_array, index=self.meanings, columns=self.utterances)
     
     @property
-    def value(self):
+    def as_array(self):
         return self.history[-1]
 
 
@@ -80,6 +95,7 @@ class RSAGain:
         self.cond_entropy_history = []
         self.listener_value_history = []
         self.gain_history = []
+        self.coop_index_history = []
 
     def H_S_of_U_given_M(self, prior, speaker):
         """
@@ -149,17 +165,25 @@ class RSAGain:
         self.gain_history.append(gain)
         return gain
     
+    def coop_index(self, listener, speaker):
+        """
+        Compute the cooperation index.
+
+        Parameters
+        ----------
+        listener : np.array (U,M)
+            The listener probability of each meaning given each utterance.
+        speaker : np.array (M,U)
+            The speaker probability of each meaning given each utterance.
+        """
+        coop_index = np.sum(speaker.T * listener) / listener.shape[0]
+        self.coop_index_history.append(coop_index)
+        return coop_index
+    
     def get_diff(self):
         if len(self.gain_history) < 2:
             return float("inf")
         return abs(self.gain_history[-1] - self.gain_history[-2])
-    
-    def save(self, path):
-        np.save(path, {
-            "cond_entropy": np.asarray(self.cond_entropy_history),
-            "listener_value": np.asarray(self.listener_value_history),
-            "gain": np.asarray(self.gain_history)
-        })
 
 
 
@@ -241,6 +265,10 @@ class RSA:
         self.max_depth = max_depth if max_depth is not None else float("inf")
         self.tolerance = tolerance if tolerance is not None else 0
 
+        self.listener = None
+        self.speaker = None
+        self.gain = None
+
 
     def run(self, output_dir: Path, verbose: bool = False):
         """
@@ -281,32 +309,31 @@ class RSA:
         self.listener = Listener(self.meanings, self.utterances, self.prior, self.lexicon)
         self.speaker = Speaker(self.meanings, self.utterances, self.cost, self.alpha)
         self.gain = RSAGain()
-        logger.info(f"Literal listener:\n{self.listener.literal_listener}\n")
+        gain = self.gain.compute_gain(self.listener.as_array, self.speaker.as_array, self.prior, self.cost, self.alpha)
+        logger.info(f"Literal listener:\n{self.listener.get_literal_as_df()}\n\n")
+        logger.info(f"Initial gain: {gain:.4f}\n")
         logger.info("-" * 40 + "\n")
 
         # Run the model for the given number of iterations
         i = 0
         while i < self.max_depth:
             # Update speaker
-            self.speaker.update(self.listener.value)
-            logger.info(f"Pragmatic speaker at step {i+1}:\n{self.speaker.df}\n")
+            self.speaker.update(self.listener.as_array)
+            logger.info(f"Pragmatic speaker at step {i+1}:\n{self.speaker.as_df}\n")
             
             # Update listener
-            self.listener.update(self.speaker.value)
-            logger.info(f"Pragmatic listener at step {i+1}:\n{self.listener.df}\n")
+            self.listener.update(self.speaker.as_array)
+            logger.info(f"Pragmatic listener at step {i+1}:\n{self.listener.as_df}\n")
 
             # Check for convergence
-            gain = self.gain.compute_gain(self.listener.value, self.speaker.value, self.prior, self.cost, self.alpha)
-            logger.info(f"Gain at step {i+1}: {gain:.6e}")
+            gain = self.gain.compute_gain(self.listener.as_array, self.speaker.as_array, self.prior, self.cost, self.alpha)
+            coop_index = self.gain.coop_index(self.listener.as_array, self.speaker.as_array)
+            logger.info(f"Step: {i+1} | Gain: {gain:.4f} | Cooperation index: {coop_index:.4f}")
             logger.info("\n" + "-" * 40 + "\n")
-            if self.gain.get_diff() <= self.tolerance:
+            if self.gain.get_diff() < self.tolerance:
                 logger.info(f"Converged after {i+1} iterations")
                 break
             i += 1
-
-        # Save history
-        np.save(output_dir / "history.npy", self.history)
-        self.gain.save(output_dir / "gain.npy")
 
         # Close logging
         for handler in logger.handlers:
@@ -315,11 +342,56 @@ class RSA:
 
     @property
     def history(self):
-        return [{
-            "listener": pd.DataFrame(l, index=self.utterances, columns=self.meanings), 
-            "speaker": pd.DataFrame(s, index=self.meanings, columns=self.utterances)
-        } for l, s in zip(self.listener.history, self.speaker.history)]
+        return {
+            "listener": [pd.DataFrame(l, index=self.utterances, columns=self.meanings) for l in self.listener.history],
+            "speaker": [pd.DataFrame(s, index=self.meanings, columns=self.utterances) for s in self.speaker.history],
+            "cond_entropy": self.gain.cond_entropy_history,
+            "listener_value": self.gain.listener_value_history,
+            "gain": self.gain.gain_history,
+            "coop_index": self.gain.coop_index_history,
+        }
     
     @history.setter
     def history(self, value):
         raise AttributeError("history is a read-only property")
+    
+    def save(self, output_dir: Path):
+        args = {
+            "meanings": self.meanings,
+            "utterances": self.utterances,
+            "lexicon": self.lexicon.tolist(),
+            "prior": self.prior.tolist(),
+            "cost": self.cost.tolist(),
+            "alpha": self.alpha,
+            "max_depth": self.max_depth,
+            "tolerance": self.tolerance
+        }
+        save_yaml(args, output_dir / "args.yaml")
+
+        with open(output_dir / "history.pkl", "wb") as f:
+            pickle.dump({
+                "listeners": np.asarray(self.listener.history),
+                "speakers": np.asarray(self.speaker.history),
+                "cond_entropy": np.asarray(self.gain.cond_entropy_history),
+                "listener_value": np.asarray(self.gain.listener_value_history),
+                "gain": np.asarray(self.gain.gain_history),
+                "coop_index": np.asarray(self.gain.coop_index_history),
+            }, f)
+
+    @classmethod
+    def load(cls, output_dir: Path):
+        with open(output_dir / "args.yaml", "r") as f:
+            args = yaml.safe_load(f)
+        with open(output_dir / "history.pkl", "rb") as f:
+            history = pickle.load(f)
+        rsa = cls(**args)
+        rsa.listener = Listener(rsa.meanings, rsa.utterances, rsa.prior, rsa.lexicon)
+        rsa.listener.history = [l for l in history["listeners"]]
+        rsa.speaker = Speaker(rsa.meanings, rsa.utterances, rsa.cost, rsa.alpha)
+        rsa.speaker.history = [s for s in history["speakers"]]
+        rsa.gain = RSAGain()
+        rsa.gain.cond_entropy_history = history["cond_entropy"].tolist()
+        rsa.gain.listener_value_history = history["listener_value"].tolist()
+        rsa.gain.gain_history = history["gain"].tolist()
+        rsa.gain.coop_index_history = history["coop_index"].tolist()
+        return rsa
