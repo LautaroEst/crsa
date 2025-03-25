@@ -6,16 +6,75 @@ from typing import List, Optional
 import shutil
 import logging
 import time
+import matplotlib.pyplot as plt
+import seaborn as sns
+import pandas as pd
 
-from ..src.rsa import RSA
+from ..src.y_rsa import YRSA
 from ..src.utils import read_config_file
+
+def plot_history(root_results_dir, alphas, max_depths, tolerances):
+
+    titles2key = [
+        ("Conditional entropy", "cond_entropy_history"),
+        ("Listener value", "listener_value_history"), 
+        ("Gain function", "gain_history"), 
+        ("Cooperation index", "coop_index_history"),
+    ]
+
+    fig, ax = plt.subplots(1, 4, figsize=(20, 4))
+    for i, (alpha, max_depth, tolerance) in enumerate(zip(alphas, max_depths, tolerances)):
+        results_dir = root_results_dir / f"alpha={alpha}" / f"max_depth={max_depth}_tolerance={tolerance}"
+        rsa = YRSA.load(results_dir)
+        for a, (title, key) in zip(ax, titles2key):
+            values = getattr(rsa.gain, key)
+            a.plot(values, color=f"C{i}")
+            a.set_title(title)
+            a.set_xlabel("Iteration")
+            a.grid()
+
+    # Unified legend
+    ax[-1].legend([f"$\\alpha={alpha},\,D_{{max}}={max_depth},\,tol={tolerance:.2g}$" for (alpha, max_depth, tolerance) in zip(alphas, max_depths, tolerances)], loc="upper right", bbox_to_anchor=(1.8, 1))
+    fig.tight_layout(pad=2.3)
+    plt.savefig(root_results_dir / "asymptotic_analysis.pdf")
+
+
+def plot_initial_final(root_results_dir, alphas, max_depths, tolerances):
+    
+    # Read RSA
+    results_dir = root_results_dir / f"alpha={alphas[0]}" / f"max_depth={max_depths[0]}_tolerance={tolerances[0]}"
+    rsa = YRSA.load(results_dir)
+
+    # Init figure
+    fig, ax = plt.subplots(1, len(alphas)+1, figsize=(4*(len(alphas)+1), 4))
+    vmin, vmax = 0, 1
+    
+    # Plot initial lexicon
+    lexicon = pd.DataFrame(rsa.lexicon, index=rsa.utterances, columns=rsa.meanings)
+    sns.heatmap(lexicon, ax=ax[0], cmap='viridis', vmin=vmin, vmax=vmax, annot=True, fmt=".2f", cbar=False)
+    ax[0].set_title(f"Initial Lexicon")
+
+    # Plot final listener for each alpha
+    for i, (alpha, max_depth, tolerance) in enumerate(zip(alphas, max_depths, tolerances)):
+        results_dir = root_results_dir / f"alpha={alpha}" / f"max_depth={max_depth}_tolerance={tolerance}"
+        rsa = YRSA.load(results_dir)
+        sns.heatmap(rsa.listener.as_df, ax=ax[i+1], cmap='viridis', vmin=vmin, vmax=vmax, annot=True, fmt=".2f", cbar=False)
+        ax[i+1].set_title(f"Final Listener for $\\alpha={alpha}$")
+        ax[i+1].set_yticklabels([])
+
+    fig.tight_layout()
+    plt.savefig(root_results_dir / "initial_final.pdf")
+    plt.close(fig)
+
 
 
 def main(
-    meanings: List[str],
+    meanings_A: List[str],
+    meaning_B: List[str],
+    categories: List[str],
     utterances: List[str],
     lexicon: List[List[int]],
-    prior: List[float],
+    prior: List[List[List[float]]],
     cost: List[float],
     alphas: List[float] = [1.0],
     max_depths: Optional[List[int]] = None,
@@ -64,10 +123,18 @@ def main(
             logger.info(f"Running experiment for alpha={alpha}, max_depth={max_depth} and tolerance={tolerance}.")
         suboutput_dir.mkdir(parents=True, exist_ok=True)
 
-        # Run RSA
-        rsa = RSA(meanings, utterances, lexicon, prior, cost, alpha, max_depth, tolerance)
+        # Run Y-RSA
+        rsa = YRSA(meanings_A, meaning_B, categories, utterances, lexicon, prior, cost, alpha, max_depth, tolerance)
         rsa.run(suboutput_dir, verbose)
         rsa.save(suboutput_dir)
+
+    # Plot training history
+    logger.info("Plotting training history.")
+    plot_history(output_dir, alphas, max_depths, tolerances)
+
+    # Plot initial lexicon and final listener for each alpha
+    logger.info("Plotting initial lexicon and final listener.")
+    plot_initial_final(output_dir, alphas, max_depths, tolerances)
 
     # Close logging
     for handler in logger.handlers:
@@ -87,7 +154,7 @@ def setup():
 
     # Parse arguments
     parser = argparse.ArgumentParser(description="Run RSA for a given configuration file")
-    parser.add_argument("config_file", type=str, help="Configuration file")
+    parser.add_argument("--world", type=str, help="Configuration file")
     parser.add_argument("--alphas", type=float, nargs="+", help="Alphas to run RSA with", default=[1.0])
     parser.add_argument("--max_depths", type=int_or_inf, nargs="+", help="Max depths to run RSA with", default=None)
     parser.add_argument("--tolerances", type=float, nargs="+", help="Tolerances to run RSA with", default=None)
@@ -95,10 +162,10 @@ def setup():
     args = parser.parse_args()
 
     # Read configuration file
-    config = read_config_file(f"{Path(__file__).stem}/{args.config_file}")
+    config = read_config_file(f"worlds/{args.world}")
 
     # Create output directory
-    output_dir = Path("outputs") / Path(__file__).stem / args.config_file
+    output_dir = Path("outputs") / Path(__file__).stem / args.world
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Update configuration
@@ -109,7 +176,7 @@ def setup():
     config["verbose"] = args.verbose
 
     # Save configuration file
-    shutil.copy(f"configs/{Path(__file__).stem}/{args.config_file}.yaml", output_dir / "config.yaml")
+    shutil.copy(f"configs/worlds/{args.world}.yaml", output_dir / "config.yaml")
 
     return config
 

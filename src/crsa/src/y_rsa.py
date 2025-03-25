@@ -7,7 +7,7 @@ import pandas as pd
 import yaml
 import pickle
 
-from ..src.utils import (
+from .utils import (
     is_list_of_strings, 
     is_numeric_ndarray, 
     is_list_of_numbers, 
@@ -20,49 +20,83 @@ from ..src.utils import (
 
 class Listener:
 
-    def __init__(self, meanings, utterances, prior, lexicon):
-        self.meanings = meanings
+    def __init__(self, categories, utterances, meanings_B, prior, lexicon):
+        self.categories = categories
+        self.meanings_B = meanings_B
         self.utterances = utterances
         self.prior = prior
         self.lexicon = lexicon
 
         # Initialize with literal listener        
-        literal_listener = lexicon * prior
-        literal_listener /= literal_listener.sum(axis=1, keepdims=True)
+        literal_listener = np.einsum('ua,aby->uby', lexicon, prior)
+        literal_listener = literal_listener / literal_listener.sum(axis=2, keepdims=True)
         self.history = [literal_listener]
 
     def update(self, speaker):
         """
         Update the listener based on the speaker
         """
-        pragmatic_listener = speaker * self.prior.reshape(-1, 1)
-        pragmatic_listener = pragmatic_listener / pragmatic_listener.sum(axis=0)
-        self.history.append(pragmatic_listener.T)
+        pragmatic_listener = np.einsum("au,aby->uby", speaker, self.prior)
+        pragmatic_listener = pragmatic_listener / pragmatic_listener.sum(axis=2, keepdims=True)
+        self.history.append(pragmatic_listener)
 
     def get_literal_as_df(self):
-        return pd.DataFrame(self.history[0], index=self.utterances, columns=self.meanings)
+        return pd.DataFrame(self.history[0].reshape(-1,len(self.categories)), index=pd.MultiIndex.from_product([self.utterances, self.meanings_B]), columns=self.categories)
     
     def get_literal_as_array(self):
         return self.history[0]
       
     @property
     def as_df(self):
-        return pd.DataFrame(self.as_array, index=self.utterances, columns=self.meanings)
+        return pd.DataFrame(self.as_array.reshape(-1,len(self.categories)), index=pd.MultiIndex.from_product([self.utterances, self.meanings_B]), columns=self.categories)
     
     @property
     def as_array(self):
         return self.history[-1]
     
 
+# if __name__ == "__main__":
+#     meanings_A = ["BAA", "ABA", "ABB", "BAB", "BBA"]
+#     meanings_B = ["112", "221", "212", "122"]
+#     utterances = ["1st position", "2nd position", "3rd position"]
+#     categories = ["There is no (A,1) pair", "1st position", "2nd position", "3rd position"]
+#     prior = np.array([
+#         [[0, 0, 1, 0], [0, 0, 0, 1], [0, 0, 1, 0], [1, 0, 0, 0]],
+#         [[0, 1, 0, 0], [0, 0, 0, 1], [1, 0, 0, 0], [0, 1, 0, 0]],
+#         [[0, 1, 0, 0], [1, 0, 0, 0], [1, 0, 0, 0], [0, 1, 0, 0]],
+#         [[0, 0, 1, 0], [1, 0, 0, 0], [0, 0, 1, 0], [1, 0, 0, 0]],
+#         [[1, 0, 0, 0], [0, 0, 0, 1], [1, 0, 0, 0], [1, 0, 0, 0]],
+#     ])
+#     lexicon = np.array([
+#         [0, 1, 1, 0, 0],
+#         [1, 0, 0, 1, 0],
+#         [1, 1, 0, 0, 1],
+#     ])
+#     l = Listener(categories, utterances, meanings_B, prior, lexicon)
+#     print(l.as_df)
+#     # print(l.as_array)
+
+#     l_probe = np.zeros((len(utterances), len(meanings_B), len(categories)))
+#     for y in range(len(categories)):
+#         for u in range(len(utterances)):
+#             for b in range(len(meanings_B)):
+#                 for a in range(len(meanings_A)):
+#                     l_probe[u, b, y] += lexicon[u, a] * prior[a, b, y]
+#     # print(pd.DataFrame(l_probe.reshape(-1, len(categories)), index=pd.MultiIndex.from_product([utterances, meanings_B]), columns=categories))
+#     # print(l_probe)
+        
+
+
+
 class Speaker:
 
-    def __init__(self, meanings, utterances, cost, alpha):
-        self.meanings = meanings
+    def __init__(self, meanings_A, utterances, cost, alpha):
+        self.meanings_A = meanings_A
         self.utterances = utterances
         self.cost = cost
         self.alpha = alpha
 
-        literal_speaker = np.ones((len(meanings), len(utterances))) * np.nan
+        literal_speaker = np.ones((len(meanings_A), len(utterances))) * np.nan
         self.history = [literal_speaker]
 
     def update(self, listener):
@@ -77,7 +111,9 @@ class Speaker:
         log_listener[~mask] = -np.inf
         log_listener = log_listener.T
 
-        pragmatic_speaker = softmax(self.alpha * (log_listener - self.cost.reshape(1,-1)), axis=1)
+        cond_prior = self.prior / np.sum(self.prior, axis=0, keepdims=True)
+        exp_term = np.einsum("aby,uby->au", cond_prior, log_listener)
+        pragmatic_speaker = softmax(self.alpha * (exp_term - self.cost.reshape(1,-1)), axis=1)
         self.history.append(pragmatic_speaker)
 
     @property
@@ -97,18 +133,19 @@ class RSAGain:
         self.gain_history = []
         self.coop_index_history = []
 
-    def H_S_of_U_given_M(self, prior, speaker):
+    def H_S_of_U_given_MA(self, prior, speaker):
         """
         Compute the conditional mutual information of the utterances given the meanings.
 
         Parameters
         ----------
-        prior : np.array (M,)
+        prior : np.array (meanings_A, meanings_B, categories)
             The prior probability of each meaning.
-        speaker : np.array (M,U)
+        speaker : np.array (meanings_A, utterances)
             The speaker probability of each meaning given each utterance.
 
         """
+        prior = prior.sum(axis=1).sum(axis=1) # marginalize over meanings_B and categories
         mask = speaker > 0
         log_speaker = np.zeros_like(speaker) # approximate x * log(x) to 0
         log_speaker[mask] = np.log(speaker[mask]) 
@@ -122,23 +159,27 @@ class RSAGain:
 
         Parameters
         ----------
-        listener : np.array (U,M)
+        listener : np.array (utterances, meanings_B, categories)
             The listener probability of each meaning given each utterance.
-        speaker : np.array (M,U)
+        speaker : np.array (meanings_A, utterances)
             The speaker probability of each meaning given each utterance.
-        prior : np.array (M,)
+        prior : np.array (meanings_A, meanings_B, categories)
             The prior probability of each meaning.
-        cost : np.array (U,)
+        cost : np.array (utterances,)
             The cost of each utterance.
         """
-        joint_speaker = speaker * prior.reshape(-1,1)
+        
         log_listener = np.zeros_like(listener)
         mask = listener > 0
         log_listener[mask] = np.log(listener[mask])
         log_listener[~mask] = -np.inf
-        V_L = log_listener - cost.reshape(-1,1)
-        pre_expected_V_L = np.zeros_like(joint_speaker.T)
-        mask = (joint_speaker.T > 0) & (V_L != -np.inf)
+        V_L = log_listener - cost.reshape(-1,1,1)
+        V_L = V_L.unsqueeze(3) # V_L(u,b,y,:)
+        
+        joint_speaker = prior.unsqueeze(1) * speaker # P_S(a,u,b,y)
+        joint_speaker = joint_speaker.transpose(1,2,3,0) # P_S(u,b,y,a)
+        pre_expected_V_L = np.zeros_like(joint_speaker)
+        mask = (joint_speaker > 0) & (V_L != -np.inf)
         pre_expected_V_L[mask] = joint_speaker.T[mask] * V_L[mask]
         expected_V_L = np.sum(pre_expected_V_L)
         self.listener_value_history.append(expected_V_L)
@@ -161,24 +202,9 @@ class RSAGain:
         alpha : float
             The rationality parameter.
         """
-        gain = alpha * self.expected_V_L_over_S(listener, speaker, prior, cost) + self.H_S_of_U_given_M(prior, speaker)
+        gain = alpha * self.expected_V_L_over_S(listener, speaker, prior, cost) + self.H_S_of_U_given_MA(prior, speaker)
         self.gain_history.append(gain)
         return gain
-    
-    def coop_index(self, listener, speaker):
-        """
-        Compute the cooperation index.
-
-        Parameters
-        ----------
-        listener : np.array (U,M)
-            The listener probability of each meaning given each utterance.
-        speaker : np.array (M,U)
-            The speaker probability of each meaning given each utterance.
-        """
-        coop_index = np.sum(speaker.T * listener) / listener.shape[0]
-        self.coop_index_history.append(coop_index)
-        return coop_index
     
     def get_diff(self):
         if len(self.gain_history) < 2:
@@ -187,9 +213,9 @@ class RSAGain:
 
 
 
-class RSA:
+class YRSA:
     """
-    Rational Speech Act (RSA) model from the listener's perspective
+    Y-Rational Speech Act (RSA) model from the listener's perspective
 
     Parameters
     ----------
@@ -211,32 +237,34 @@ class RSA:
         Tolerance for convergence
     """
 
-    def __init__(self, meanings, utterances, lexicon, prior=None, cost=None, alpha=1., max_depth=float("inf"), tolerance=1e-6):
+    def __init__(self, meanings_A, meanings_B, categories, utterances, lexicon, prior=None, cost=None, alpha=1., max_depth=None, tolerance=1e-6):
 
         # Check meanings and utterances
-        if not is_list_of_strings(meanings):
-            raise ValueError("meanings should be a list of strings")
-        self.meanings = meanings
+        if not is_list_of_strings(meanings_A) or not is_list_of_strings(meanings_B) or not is_list_of_strings(categories):
+            raise ValueError("meanings and categories should be a list of strings")
+        self.meanings_A = meanings_A
+        self.meanings_B = meanings_B
+        self.categories = categories
         if not is_list_of_strings(utterances):
             raise ValueError("utterances should be a list of strings")
         self.utterances = utterances
 
         # Check lexicon
-        if is_list_of_list_of_numbers(lexicon) and len(lexicon) == len(utterances) and all(len(row) == len(meanings) for row in lexicon):
+        if is_list_of_list_of_numbers(lexicon) and len(lexicon) == len(utterances) and all(len(row) == len(meanings_A) for row in lexicon):
             lexicon = np.asarray(lexicon, dtype=float)
-        elif not is_numeric_ndarray(lexicon) or lexicon.shape != (len(utterances), len(meanings)):
-            raise ValueError("lexicon should be a numpy array of shape (len(utterances), len(meanings))")
+        elif not is_numeric_ndarray(lexicon) or lexicon.shape != (len(utterances), len(meanings_A)):
+            raise ValueError("lexicon should be a numpy array of shape (len(utterances), len(meanings_A))")
         self.lexicon = lexicon
 
         # Check prior
         if prior is None:
-            prior = np.ones(len(meanings), dtype=float) / len(meanings)
-        elif is_numeric_ndarray(prior) and prior.shape == (len(meanings),):
-            pass
-        elif is_list_of_numbers(prior) and len(prior) == len(meanings):
-            prior = np.asarray(prior).astype(float)
+            prior = np.ones((len(meanings_A), len(meanings_B), len(categories)), dtype=float)
+            prior /= prior.sum()
         else:
-            raise ValueError("prior should be a list of floats or a numpy array of shape (len(meanings),)")
+            try:
+                prior = np.asarray(prior).astype(float)
+            except:
+                raise ValueError("prior should be an array-like object of shape (len(meanings_A), len(meanings_B), len(categories))")
         self.prior = prior
 
         # Check cost
@@ -256,14 +284,14 @@ class RSA:
         self.alpha = float(alpha)
 
         # Check max_depth and tolerance
-        if not is_positive_integer(max_depth) and max_depth != float("inf"):
-            raise ValueError("depth should be a positive integer or inf")
-        if not is_positive_number(tolerance) and tolerance != 0:
+        if not is_positive_integer(max_depth) and max_depth is not None:
+            raise ValueError("depth should be a positive integer or None")
+        if not is_positive_number(tolerance) and tolerance is not None:
             raise ValueError("tolerance should be a positive number or None")
-        if max_depth == float("inf") and tolerance == 0:
+        if max_depth is None and tolerance is None:
             raise ValueError("Either max_depth or tolerance should be provided")
-        self.max_depth = max_depth
-        self.tolerance = tolerance
+        self.max_depth = max_depth if max_depth is not None else float("inf")
+        self.tolerance = tolerance if tolerance is not None else 0
 
         self.listener = None
         self.speaker = None
@@ -298,16 +326,16 @@ class RSA:
         logger.info(f"Running RSA model for max depth {self.max_depth} and tolerance {self.tolerance:.2e}")
         logger.info("-" * 40)
         logger.info(
-            f"\nLexicon:\n\n{pd.DataFrame(self.lexicon, index=self.utterances, columns=self.meanings)}\n\n"
-            f"Prior:\n\n{pd.Series(self.prior, index=self.meanings).to_string()}\n\n"
+            f"\nLexicon:\n\n{pd.DataFrame(self.lexicon, index=self.utterances, columns=self.meanings_A)}\n\n"
+            f"Prior:\n\n{pd.DataFrame(self.prior, index=pd.MultiIndex.from_product([self.meanings_A, self.meanings_B]), columns=self.categories)}\n\n"
             f"Cost:\n\n{pd.Series(self.cost, index=self.utterances).to_string()}\n\n"
             f"Alpha: {self.alpha}\n"
         )
         logger.info("-" * 40 + "\n")
         
         # Init listener and speaker
-        self.listener = Listener(self.meanings, self.utterances, self.prior, self.lexicon)
-        self.speaker = Speaker(self.meanings, self.utterances, self.cost, self.alpha)
+        self.listener = Listener(self.categories, self.utterances, self.meanings_B, self.prior, self.lexicon)
+        self.speaker = Speaker(self.meanings_A, self.utterances, self.cost, self.alpha)
         self.gain = RSAGain()
         gain = self.gain.compute_gain(self.listener.as_array, self.speaker.as_array, self.prior, self.cost, self.alpha)
         logger.info(f"Literal listener:\n{self.listener.get_literal_as_df()}\n\n")
@@ -327,8 +355,7 @@ class RSA:
 
             # Check for convergence
             gain = self.gain.compute_gain(self.listener.as_array, self.speaker.as_array, self.prior, self.cost, self.alpha)
-            coop_index = self.gain.coop_index(self.listener.as_array, self.speaker.as_array)
-            logger.info(f"Step: {i+1} | Gain: {gain:.4f} | Cooperation index: {coop_index:.4f}")
+            logger.info(f"Step: {i+1} | Gain: {gain:.4f}")
             logger.info("\n" + "-" * 40 + "\n")
             if self.gain.get_diff() < self.tolerance:
                 logger.info(f"Converged after {i+1} iterations")
@@ -343,8 +370,8 @@ class RSA:
     @property
     def history(self):
         return {
-            "listener": [pd.DataFrame(l, index=self.utterances, columns=self.meanings) for l in self.listener.history],
-            "speaker": [pd.DataFrame(s, index=self.meanings, columns=self.utterances) for s in self.speaker.history],
+            "listener": [pd.DataFrame(l, index=pd.MultiIndex.from_product([self.utterances, self.meanings_B]), columns=self.categories) for l in self.listener.history],
+            "speaker": [pd.DataFrame(s, index=self.meanings_A, columns=self.utterances) for s in self.speaker.history],
             "cond_entropy": self.gain.cond_entropy_history,
             "listener_value": self.gain.listener_value_history,
             "gain": self.gain.gain_history,
@@ -385,7 +412,7 @@ class RSA:
         with open(output_dir / "history.pkl", "rb") as f:
             history = pickle.load(f)
         rsa = cls(**args)
-        rsa.listener = Listener(rsa.meanings, rsa.utterances, rsa.prior, rsa.lexicon)
+        rsa.listener = Listener(rsa.categories, rsa.utterances, rsa.meanings_B, rsa.prior, rsa.lexicon)
         rsa.listener.history = [l for l in history["listeners"]]
         rsa.speaker = Speaker(rsa.meanings, rsa.utterances, rsa.cost, rsa.alpha)
         rsa.speaker.history = [s for s in history["speakers"]]
