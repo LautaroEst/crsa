@@ -11,6 +11,20 @@
             "cwd": "${workspaceFolder}",
             "request": "launch",
             "module": "crsa.tests.rsa"
+        },
+        {
+            "name": "Debug: YRSA",
+            "type": "debugpy",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "request": "launch",
+            "module": "crsa.scripts.yrsa_hyperparams",
+            "args": [
+                "--world", "toy_game",
+                "--alphas", "1.0",
+                "--max_depths", "5",
+                "-v"
+            ]
         }
     ]
 }

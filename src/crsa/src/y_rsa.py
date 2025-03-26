@@ -17,6 +17,9 @@ from .utils import (
     save_yaml
 )
 
+INF = 1e10
+ZERO = 1e-10
+
 
 class Listener:
 
@@ -41,58 +44,26 @@ class Listener:
         self.history.append(pragmatic_listener)
 
     def get_literal_as_df(self):
-        return pd.DataFrame(self.history[0].reshape(-1,len(self.categories)), index=pd.MultiIndex.from_product([self.utterances, self.meanings_B]), columns=self.categories)
+        return pd.DataFrame(self.history[0].reshape(-1,len(self.categories)), index=pd.MultiIndex.from_product([self.utterances, self.meanings_B], names=['utterances','meanings_B']), columns=self.categories)
     
     def get_literal_as_array(self):
         return self.history[0]
       
     @property
     def as_df(self):
-        return pd.DataFrame(self.as_array.reshape(-1,len(self.categories)), index=pd.MultiIndex.from_product([self.utterances, self.meanings_B]), columns=self.categories)
+        return pd.DataFrame(self.as_array.reshape(-1,len(self.categories)), index=pd.MultiIndex.from_product([self.utterances, self.meanings_B], names=['utterances','meanings_B']), columns=self.categories)
     
     @property
     def as_array(self):
         return self.history[-1]
     
 
-# if __name__ == "__main__":
-#     meanings_A = ["BAA", "ABA", "ABB", "BAB", "BBA"]
-#     meanings_B = ["112", "221", "212", "122"]
-#     utterances = ["1st position", "2nd position", "3rd position"]
-#     categories = ["There is no (A,1) pair", "1st position", "2nd position", "3rd position"]
-#     prior = np.array([
-#         [[0, 0, 1, 0], [0, 0, 0, 1], [0, 0, 1, 0], [1, 0, 0, 0]],
-#         [[0, 1, 0, 0], [0, 0, 0, 1], [1, 0, 0, 0], [0, 1, 0, 0]],
-#         [[0, 1, 0, 0], [1, 0, 0, 0], [1, 0, 0, 0], [0, 1, 0, 0]],
-#         [[0, 0, 1, 0], [1, 0, 0, 0], [0, 0, 1, 0], [1, 0, 0, 0]],
-#         [[1, 0, 0, 0], [0, 0, 0, 1], [1, 0, 0, 0], [1, 0, 0, 0]],
-#     ])
-#     lexicon = np.array([
-#         [0, 1, 1, 0, 0],
-#         [1, 0, 0, 1, 0],
-#         [1, 1, 0, 0, 1],
-#     ])
-#     l = Listener(categories, utterances, meanings_B, prior, lexicon)
-#     print(l.as_df)
-#     # print(l.as_array)
-
-#     l_probe = np.zeros((len(utterances), len(meanings_B), len(categories)))
-#     for y in range(len(categories)):
-#         for u in range(len(utterances)):
-#             for b in range(len(meanings_B)):
-#                 for a in range(len(meanings_A)):
-#                     l_probe[u, b, y] += lexicon[u, a] * prior[a, b, y]
-#     # print(pd.DataFrame(l_probe.reshape(-1, len(categories)), index=pd.MultiIndex.from_product([utterances, meanings_B]), columns=categories))
-#     # print(l_probe)
-        
-
-
-
 class Speaker:
 
-    def __init__(self, meanings_A, utterances, cost, alpha):
+    def __init__(self, meanings_A, utterances, prior, cost, alpha):
         self.meanings_A = meanings_A
         self.utterances = utterances
+        self.prior = prior
         self.cost = cost
         self.alpha = alpha
 
@@ -108,17 +79,17 @@ class Speaker:
         mask = listener > 0
         log_listener = np.zeros_like(listener)
         log_listener[mask] = np.log(listener[mask])
-        log_listener[~mask] = -np.inf
-        log_listener = log_listener.T
+        log_listener[~mask] = -INF
 
-        cond_prior = self.prior / np.sum(self.prior, axis=0, keepdims=True)
+        cond_prior = self.prior / self.prior.sum(axis=1, keepdims=True).sum(axis=2, keepdims=True) # Cond(a,b,y) = P(b,y|a) = P(a,b,y) / P(a)
+        cond_prior[cond_prior == 0] = ZERO
         exp_term = np.einsum("aby,uby->au", cond_prior, log_listener)
         pragmatic_speaker = softmax(self.alpha * (exp_term - self.cost.reshape(1,-1)), axis=1)
         self.history.append(pragmatic_speaker)
 
     @property
     def as_df(self):
-        return pd.DataFrame(self.as_array, index=self.meanings, columns=self.utterances)
+        return pd.DataFrame(self.as_array, index=self.meanings_A, columns=self.utterances)
     
     @property
     def as_array(self):
@@ -148,7 +119,8 @@ class RSAGain:
         prior = prior.sum(axis=1).sum(axis=1) # marginalize over meanings_B and categories
         mask = speaker > 0
         log_speaker = np.zeros_like(speaker) # approximate x * log(x) to 0
-        log_speaker[mask] = np.log(speaker[mask]) 
+        log_speaker[mask] = np.log(speaker[mask])
+        log_speaker[~mask] = ZERO
         cond_entropy = -np.sum(speaker * prior.reshape(-1,1) * log_speaker)
         self.cond_entropy_history.append(cond_entropy)
         return cond_entropy
@@ -172,16 +144,13 @@ class RSAGain:
         log_listener = np.zeros_like(listener)
         mask = listener > 0
         log_listener[mask] = np.log(listener[mask])
-        log_listener[~mask] = -np.inf
-        V_L = log_listener - cost.reshape(-1,1,1)
-        V_L = V_L.unsqueeze(3) # V_L(u,b,y,:)
-        
-        joint_speaker = prior.unsqueeze(1) * speaker # P_S(a,u,b,y)
-        joint_speaker = joint_speaker.transpose(1,2,3,0) # P_S(u,b,y,a)
-        pre_expected_V_L = np.zeros_like(joint_speaker)
-        mask = (joint_speaker > 0) & (V_L != -np.inf)
-        pre_expected_V_L[mask] = joint_speaker.T[mask] * V_L[mask]
-        expected_V_L = np.sum(pre_expected_V_L)
+        log_listener[~mask] = -INF
+        V_L = log_listener - cost.reshape(-1,1,1) # V_L(u,b,y) = log(P(y|u,b)) - C(u)
+
+        joint_speaker = np.expand_dims(prior, axis=1) * np.expand_dims(speaker, axis=(2,3)) # P_S(a,u,b,y) = P(a,b,y) * S(a,u)  
+        joint_speaker = joint_speaker.sum(axis=0) # P_S(u,b,y)
+        joint_speaker[joint_speaker == 0] = ZERO
+        expected_V_L = np.sum(joint_speaker * V_L)
         self.listener_value_history.append(expected_V_L)
         return expected_V_L
     
@@ -284,14 +253,14 @@ class YRSA:
         self.alpha = float(alpha)
 
         # Check max_depth and tolerance
-        if not is_positive_integer(max_depth) and max_depth is not None:
-            raise ValueError("depth should be a positive integer or None")
-        if not is_positive_number(tolerance) and tolerance is not None:
+        if not is_positive_integer(max_depth) and max_depth != float("inf"):
+            raise ValueError("depth should be a positive integer or inf")
+        if not is_positive_number(tolerance) and tolerance != 0:
             raise ValueError("tolerance should be a positive number or None")
-        if max_depth is None and tolerance is None:
+        if max_depth == float("inf") and tolerance == 0:
             raise ValueError("Either max_depth or tolerance should be provided")
-        self.max_depth = max_depth if max_depth is not None else float("inf")
-        self.tolerance = tolerance if tolerance is not None else 0
+        self.max_depth = max_depth
+        self.tolerance = tolerance
 
         self.listener = None
         self.speaker = None
@@ -327,7 +296,7 @@ class YRSA:
         logger.info("-" * 40)
         logger.info(
             f"\nLexicon:\n\n{pd.DataFrame(self.lexicon, index=self.utterances, columns=self.meanings_A)}\n\n"
-            f"Prior:\n\n{pd.DataFrame(self.prior, index=pd.MultiIndex.from_product([self.meanings_A, self.meanings_B]), columns=self.categories)}\n\n"
+            f"Prior:\n\n{pd.DataFrame(self.prior.reshape(-1,len(self.categories)), index=pd.MultiIndex.from_product([self.meanings_A, self.meanings_B], names=['meanings_A','meanings_B']), columns=self.categories)}\n\n"
             f"Cost:\n\n{pd.Series(self.cost, index=self.utterances).to_string()}\n\n"
             f"Alpha: {self.alpha}\n"
         )
@@ -335,7 +304,7 @@ class YRSA:
         
         # Init listener and speaker
         self.listener = Listener(self.categories, self.utterances, self.meanings_B, self.prior, self.lexicon)
-        self.speaker = Speaker(self.meanings_A, self.utterances, self.cost, self.alpha)
+        self.speaker = Speaker(self.meanings_A, self.utterances, self.prior, self.cost, self.alpha)
         self.gain = RSAGain()
         gain = self.gain.compute_gain(self.listener.as_array, self.speaker.as_array, self.prior, self.cost, self.alpha)
         logger.info(f"Literal listener:\n{self.listener.get_literal_as_df()}\n\n")
@@ -370,7 +339,7 @@ class YRSA:
     @property
     def history(self):
         return {
-            "listener": [pd.DataFrame(l, index=pd.MultiIndex.from_product([self.utterances, self.meanings_B]), columns=self.categories) for l in self.listener.history],
+            "listener": [pd.DataFrame(l, index=pd.MultiIndex.from_product([self.utterances, self.meanings_B], names=['utterances','meanings_B']), columns=self.categories) for l in self.listener.history],
             "speaker": [pd.DataFrame(s, index=self.meanings_A, columns=self.utterances) for s in self.speaker.history],
             "cond_entropy": self.gain.cond_entropy_history,
             "listener_value": self.gain.listener_value_history,
@@ -384,7 +353,9 @@ class YRSA:
     
     def save(self, output_dir: Path):
         args = {
-            "meanings": self.meanings,
+            "meanings_A": self.meanings_A,
+            "meanings_B": self.meanings_B,
+            "categories": self.categories,
             "utterances": self.utterances,
             "lexicon": self.lexicon.tolist(),
             "prior": self.prior.tolist(),
@@ -414,7 +385,7 @@ class YRSA:
         rsa = cls(**args)
         rsa.listener = Listener(rsa.categories, rsa.utterances, rsa.meanings_B, rsa.prior, rsa.lexicon)
         rsa.listener.history = [l for l in history["listeners"]]
-        rsa.speaker = Speaker(rsa.meanings, rsa.utterances, rsa.cost, rsa.alpha)
+        rsa.speaker = Speaker(rsa.meanings_A, rsa.utterances, rsa.prior, rsa.cost, rsa.alpha)
         rsa.speaker.history = [s for s in history["speakers"]]
         rsa.gain = RSAGain()
         rsa.gain.cond_entropy_history = history["cond_entropy"].tolist()

@@ -50,7 +50,7 @@ def plot_initial_final(root_results_dir, alphas, max_depths, tolerances):
     vmin, vmax = 0, 1
     
     # Plot initial lexicon
-    lexicon = pd.DataFrame(rsa.lexicon, index=rsa.utterances, columns=rsa.meanings)
+    lexicon = pd.DataFrame(rsa.lexicon, index=rsa.utterances, columns=rsa.meanings_A)
     sns.heatmap(lexicon, ax=ax[0], cmap='viridis', vmin=vmin, vmax=vmax, annot=True, fmt=".2f", cbar=False)
     ax[0].set_title(f"Initial Lexicon")
 
@@ -58,9 +58,11 @@ def plot_initial_final(root_results_dir, alphas, max_depths, tolerances):
     for i, (alpha, max_depth, tolerance) in enumerate(zip(alphas, max_depths, tolerances)):
         results_dir = root_results_dir / f"alpha={alpha}" / f"max_depth={max_depth}_tolerance={tolerance}"
         rsa = YRSA.load(results_dir)
-        sns.heatmap(rsa.listener.as_df, ax=ax[i+1], cmap='viridis', vmin=vmin, vmax=vmax, annot=True, fmt=".2f", cbar=False)
+        sns.heatmap(rsa.listener.as_df, ax=ax[i+1], cmap='viridis', vmin=vmin, vmax=vmax, annot=True, fmt=".2f", cbar=False, yticklabels=rsa.listener.as_df.index)
         ax[i+1].set_title(f"Final Listener for $\\alpha={alpha}$")
-        ax[i+1].set_yticklabels([])
+        if i > 0:
+            ax[i+1].set_ylabel("")
+            ax[i+1].set_yticklabels([])
 
     fig.tight_layout()
     plt.savefig(root_results_dir / "initial_final.pdf")
@@ -70,7 +72,7 @@ def plot_initial_final(root_results_dir, alphas, max_depths, tolerances):
 
 def main(
     meanings_A: List[str],
-    meaning_B: List[str],
+    meanings_B: List[str],
     categories: List[str],
     utterances: List[str],
     lexicon: List[List[int]],
@@ -124,7 +126,7 @@ def main(
         suboutput_dir.mkdir(parents=True, exist_ok=True)
 
         # Run Y-RSA
-        rsa = YRSA(meanings_A, meaning_B, categories, utterances, lexicon, prior, cost, alpha, max_depth, tolerance)
+        rsa = YRSA(meanings_A, meanings_B, categories, utterances, lexicon, prior, cost, alpha, max_depth, tolerance)
         rsa.run(suboutput_dir, verbose)
         rsa.save(suboutput_dir)
 
