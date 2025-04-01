@@ -2,7 +2,7 @@
 import argparse
 from pathlib import Path
 import sys
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import shutil
 import logging
 import time
@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
 
-from ..src.y_rsa import YRSA
+from ..src.crsa import CRSA
 from ..src.utils import read_config_file
 
 def plot_history(root_results_dir, alphas, max_depths, tolerances):
@@ -25,7 +25,7 @@ def plot_history(root_results_dir, alphas, max_depths, tolerances):
     fig, ax = plt.subplots(1, 4, figsize=(20, 4))
     for i, (alpha, max_depth, tolerance) in enumerate(zip(alphas, max_depths, tolerances)):
         results_dir = root_results_dir / f"alpha={alpha}" / f"max_depth={max_depth}_tolerance={tolerance}"
-        rsa = YRSA.load(results_dir)
+        rsa = CRSA.load(results_dir)
         for a, (title, key) in zip(ax, titles2key):
             values = getattr(rsa.gain, key)
             a.plot(values, color=f"C{i}")
@@ -43,7 +43,7 @@ def plot_initial_final(root_results_dir, alphas, max_depths, tolerances):
     
     # Read RSA
     results_dir = root_results_dir / f"alpha={alphas[0]}" / f"max_depth={max_depths[0]}_tolerance={tolerances[0]}"
-    rsa = YRSA.load(results_dir)
+    rsa = CRSA.load(results_dir)
 
     # Init figure
     fig, ax = plt.subplots(1, len(alphas)+1, figsize=(4*(len(alphas)+1), 4))
@@ -57,7 +57,7 @@ def plot_initial_final(root_results_dir, alphas, max_depths, tolerances):
     # Plot final listener for each alpha
     for i, (alpha, max_depth, tolerance) in enumerate(zip(alphas, max_depths, tolerances)):
         results_dir = root_results_dir / f"alpha={alpha}" / f"max_depth={max_depth}_tolerance={tolerance}"
-        rsa = YRSA.load(results_dir)
+        rsa = CRSA.load(results_dir)
         sns.heatmap(rsa.listener.as_df, ax=ax[i+1], cmap='viridis', vmin=vmin, vmax=vmax, annot=True, fmt=".2f", cbar=False, yticklabels=rsa.listener.as_df.index)
         ax[i+1].set_title(f"Final Listener for $\\alpha={alpha}$")
         if i > 0:
@@ -74,10 +74,14 @@ def main(
     meanings_A: List[str],
     meanings_B: List[str],
     categories: List[str],
-    utterances: List[str],
-    lexicon: List[List[int]],
+    utterances_A: List[str],
+    utterances_B: List[str],
+    lexicon_A: List[Tuple[str,List[int]]],
+    lexicon_B: List[Tuple[str,List[int]]],
     prior: List[List[List[float]]],
-    cost: List[float],
+    cost_A: List[float],
+    cost_B: List[float],
+    turns: float,
     alphas: List[float] = [1.0],
     max_depths: Optional[List[int]] = None,
     tolerances: Optional[List[float]] = None,
@@ -125,18 +129,18 @@ def main(
             logger.info(f"Running experiment for alpha={alpha}, max_depth={max_depth} and tolerance={tolerance}.")
         suboutput_dir.mkdir(parents=True, exist_ok=True)
 
-        # Run Y-RSA
-        rsa = YRSA(meanings_A, meanings_B, categories, utterances, lexicon, prior, cost, alpha, max_depth, tolerance)
+        # Run CRSA
+        rsa = CRSA(meanings_A, meanings_B, categories, utterances_A, utterances_B, lexicon_A, lexicon_B, prior, cost_A, cost_B, alpha, max_depth, tolerance, turns)
         rsa.run(suboutput_dir, verbose)
         rsa.save(suboutput_dir)
 
     # Plot training history
-    logger.info("Plotting training history.")
-    plot_history(output_dir, alphas, max_depths, tolerances)
+    # logger.info("Plotting training history.")
+    # plot_history(output_dir, alphas, max_depths, tolerances)
 
     # Plot initial lexicon and final listener for each alpha
-    logger.info("Plotting literal and final listener.")
-    plot_initial_final(output_dir, alphas, max_depths, tolerances)
+    # logger.info("Plotting literal and final listener.")
+    # plot_initial_final(output_dir, alphas, max_depths, tolerances)
 
     # Close logging
     for handler in logger.handlers:

@@ -14,11 +14,9 @@ from .utils import (
     is_positive_number, 
     is_positive_integer, 
     is_list_of_list_of_numbers,
-    save_yaml
+    save_yaml,
+    ZERO, INF,
 )
-
-INF = 1e10
-ZERO = 1e-10
 
 
 class Listener:
@@ -96,7 +94,7 @@ class Speaker:
         return self.history[-1]
 
 
-class RSAGain:
+class YRSAGain:
 
     def __init__(self):
         self.cond_entropy_history = []
@@ -178,7 +176,7 @@ class RSAGain:
     def get_diff(self):
         if len(self.gain_history) < 2:
             return float("inf")
-        return abs(self.gain_history[-1] - self.gain_history[-2])
+        return abs(self.gain_history[-1] - self.gain_history[-2]) / abs(self.gain_history[-2])
 
 
 
@@ -267,7 +265,7 @@ class YRSA:
         self.gain = None
 
 
-    def run(self, output_dir: Path, verbose: bool = False):
+    def run(self, output_dir: Path, verbose: bool = False, prefix: str = ""):
         """
         Run the RSA model for a given number of iterations
 
@@ -286,13 +284,13 @@ class YRSA:
             console_handler = logging.StreamHandler()
             console_handler.setFormatter(formatter)
             logger.addHandler(console_handler)
-        file_handler = logging.FileHandler(output_dir / "history.log", mode="w", encoding="utf-8")
+        file_handler = logging.FileHandler(output_dir / f"{prefix}history.log", mode="w", encoding="utf-8")
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
         logger.setLevel(logging.INFO)
 
         # Log configuration
-        logger.info(f"Running RSA model for max depth {self.max_depth} and tolerance {self.tolerance:.2e}")
+        logger.info(f"Running Y-RSA model for max depth {self.max_depth} and tolerance {self.tolerance:.2e}")
         logger.info("-" * 40)
         logger.info(
             f"\nLexicon:\n\n{pd.DataFrame(self.lexicon, index=self.utterances, columns=self.meanings_A)}\n\n"
@@ -305,7 +303,7 @@ class YRSA:
         # Init listener and speaker
         self.listener = Listener(self.categories, self.utterances, self.meanings_B, self.prior, self.lexicon)
         self.speaker = Speaker(self.meanings_A, self.utterances, self.prior, self.cost, self.alpha)
-        self.gain = RSAGain()
+        self.gain = YRSAGain()
         gain = self.gain.compute_gain(self.listener.as_array, self.speaker.as_array, self.prior, self.cost, self.alpha)
         logger.info(f"Literal listener:\n{self.listener.get_literal_as_df()}\n\n")
         logger.info(f"Initial gain: {gain:.4f}\n")
@@ -351,7 +349,7 @@ class YRSA:
     def history(self, value):
         raise AttributeError("history is a read-only property")
     
-    def save(self, output_dir: Path):
+    def save(self, output_dir: Path, prefix: str = ""):
         args = {
             "meanings_A": self.meanings_A,
             "meanings_B": self.meanings_B,
@@ -364,9 +362,9 @@ class YRSA:
             "max_depth": self.max_depth,
             "tolerance": self.tolerance
         }
-        save_yaml(args, output_dir / "args.yaml")
+        save_yaml(args, output_dir / f"{prefix}args.yaml")
 
-        with open(output_dir / "history.pkl", "wb") as f:
+        with open(output_dir / f"{prefix}history.pkl", "wb") as f:
             pickle.dump({
                 "listeners": np.asarray(self.listener.history),
                 "speakers": np.asarray(self.speaker.history),
@@ -377,17 +375,17 @@ class YRSA:
             }, f)
 
     @classmethod
-    def load(cls, output_dir: Path):
+    def load(cls, output_dir: Path, prefix: str = ""):
         with open(output_dir / "args.yaml", "r") as f:
             args = yaml.safe_load(f)
-        with open(output_dir / "history.pkl", "rb") as f:
+        with open(output_dir / f"{prefix}history.pkl", "rb") as f:
             history = pickle.load(f)
         rsa = cls(**args)
         rsa.listener = Listener(rsa.categories, rsa.utterances, rsa.meanings_B, rsa.prior, rsa.lexicon)
         rsa.listener.history = [l for l in history["listeners"]]
         rsa.speaker = Speaker(rsa.meanings_A, rsa.utterances, rsa.prior, rsa.cost, rsa.alpha)
         rsa.speaker.history = [s for s in history["speakers"]]
-        rsa.gain = RSAGain()
+        rsa.gain = YRSAGain()
         rsa.gain.cond_entropy_history = history["cond_entropy"].tolist()
         rsa.gain.listener_value_history = history["listener_value"].tolist()
         rsa.gain.gain_history = history["gain"].tolist()

@@ -21,8 +21,22 @@
             "module": "crsa.scripts.yrsa_hyperparams",
             "args": [
                 "--world", "toy_game",
+                "--alphas", "0.1",
+                "--max_depths", "10",
+                "-v"
+            ]
+        },
+        {
+            "name": "Debug: CRSA",
+            "type": "debugpy",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "request": "launch",
+            "module": "crsa.scripts.crsa_hyperparams",
+            "args": [
+                "--world", "multiround_toy_game",
                 "--alphas", "1.0",
-                "--max_depths", "5",
+                "--max_depths", "2",
                 "-v"
             ]
         }

@@ -32,7 +32,7 @@ def plot_history(root_results_dir, alphas, max_depths, tolerances):
             a.plot(values, color=f"C{i}")
             a.set_title(title)
             a.set_xlabel("Iteration")
-            a.grid()
+            a.grid(True)
 
     # Unified legend
     ax[-1].legend([f"$\\alpha={alpha},\,D_{{max}}={max_depth},\,tol={tolerance:.2g}$" for (alpha, max_depth, tolerance) in zip(alphas, max_depths, tolerances)], loc="upper right", bbox_to_anchor=(1.8, 1))
@@ -51,9 +51,9 @@ def plot_initial_final(root_results_dir, alphas, max_depths, tolerances):
     vmin, vmax = 0, 1
     
     # Plot initial lexicon
-    lexicon = pd.DataFrame(rsa.lexicon, index=rsa.utterances, columns=rsa.meanings)
-    sns.heatmap(lexicon, ax=ax[0], cmap='viridis', vmin=vmin, vmax=vmax, annot=True, fmt=".2f", cbar=False)
-    ax[0].set_title(f"Initial Lexicon")
+    literal_listener = rsa.listener.get_literal_as_df()
+    sns.heatmap(literal_listener, ax=ax[0], cmap='viridis', vmin=vmin, vmax=vmax, annot=True, fmt=".2f", cbar=False, yticklabels=rsa.listener.as_df.index)
+    ax[0].set_title(f"Literal listener")
 
     # Plot final listener for each alpha
     for i, (alpha, max_depth, tolerance) in enumerate(zip(alphas, max_depths, tolerances)):
@@ -64,7 +64,7 @@ def plot_initial_final(root_results_dir, alphas, max_depths, tolerances):
         ax[i+1].set_yticklabels([])
 
     fig.tight_layout()
-    plt.savefig(root_results_dir / "initial_final.pdf")
+    plt.savefig(root_results_dir / "listeners.pdf")
     plt.close(fig)
 
 
@@ -132,7 +132,7 @@ def main(
     plot_history(output_dir, alphas, max_depths, tolerances)
 
     # Plot initial lexicon and final listener for each alpha
-    logger.info("Plotting initial lexicon and final listener.")
+    logger.info("Plotting literal and final listener.")
     plot_initial_final(output_dir, alphas, max_depths, tolerances)
 
     # Close logging

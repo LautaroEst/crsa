@@ -2,6 +2,9 @@ import sys
 import yaml
 import numpy as np
 
+INF = 1e10
+ZERO = 1e-10
+
 def save_yaml(data, file_path):
     with open(file_path, "w") as f:
         yaml.safe_dump(data, f, default_flow_style=True)

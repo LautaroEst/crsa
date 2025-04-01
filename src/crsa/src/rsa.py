@@ -14,7 +14,8 @@ from ..src.utils import (
     is_positive_number, 
     is_positive_integer, 
     is_list_of_list_of_numbers,
-    save_yaml
+    save_yaml,
+    ZERO, INF,
 )
 
 
@@ -74,7 +75,7 @@ class Speaker:
         mask = listener > 0
         log_listener = np.zeros_like(listener)
         log_listener[mask] = np.log(listener[mask])
-        log_listener[~mask] = -np.inf
+        log_listener[~mask] = -INF
         log_listener = log_listener.T
 
         pragmatic_speaker = softmax(self.alpha * (log_listener - self.cost.reshape(1,-1)), axis=1)
@@ -110,8 +111,9 @@ class RSAGain:
 
         """
         mask = speaker > 0
-        log_speaker = np.zeros_like(speaker) # approximate x * log(x) to 0
+        log_speaker = np.zeros_like(speaker) 
         log_speaker[mask] = np.log(speaker[mask]) 
+        log_speaker[~mask] = -ZERO # approximate x * log(x) to 0 for x -> 0
         cond_entropy = -np.sum(speaker * prior.reshape(-1,1) * log_speaker)
         self.cond_entropy_history.append(cond_entropy)
         return cond_entropy
@@ -135,12 +137,9 @@ class RSAGain:
         log_listener = np.zeros_like(listener)
         mask = listener > 0
         log_listener[mask] = np.log(listener[mask])
-        log_listener[~mask] = -np.inf
+        log_listener[~mask] = -INF
         V_L = log_listener - cost.reshape(-1,1)
-        pre_expected_V_L = np.zeros_like(joint_speaker.T)
-        mask = (joint_speaker.T > 0) & (V_L != -np.inf)
-        pre_expected_V_L[mask] = joint_speaker.T[mask] * V_L[mask]
-        expected_V_L = np.sum(pre_expected_V_L)
+        expected_V_L = np.sum(joint_speaker.T * V_L)
         self.listener_value_history.append(expected_V_L)
         return expected_V_L
     
@@ -183,7 +182,7 @@ class RSAGain:
     def get_diff(self):
         if len(self.gain_history) < 2:
             return float("inf")
-        return abs(self.gain_history[-1] - self.gain_history[-2])
+        return abs(self.gain_history[-1] - self.gain_history[-2]) / abs(self.gain_history[-2])
 
 
 
