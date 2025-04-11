@@ -17,14 +17,12 @@ from .utils import (
     is_positive_integer, 
     save_yaml,
 )
-from .single_turn_crsa import SingleCRSA
+from .y_rsa import YRSA
 
 
-
-
-class CRSA:
+class MultiturnYRSA:
     """
-    Collaborative Rational Speech Act (CRSA) model from the listener's perspective
+    Y-Rational Speech Act (RSA) model from the listener's perspective
 
     Parameters
     ----------
@@ -60,6 +58,7 @@ class CRSA:
         self.utterances_B = utterances_B
 
         # Check lexicon
+        ## TODO: Validate lexicon
         for agent, lexicon in [('A', lexicon_A), ('B', lexicon_B)]:
             if not isinstance(lexicon, list):
                 raise ValueError("lexicon should be a list of 2D Tuple-like object")
@@ -84,7 +83,8 @@ class CRSA:
         self.prior = prior
 
         # Check cost
-        for agent, cost, utterances in [("A", cost_A, utterances_A), ("B", cost_B, utterances_B)]:
+        for agent, cost, lexicon in [("A", cost_A, self.lexicon_A), ("B", cost_B, self.lexicon_B)]:
+            utterances = lexicon.keys()
             if cost is None:
                 cost = np.zeros(len(utterances), dtype=float)
             elif is_numeric_ndarray(cost) and cost.shape == (len(utterances),):
@@ -116,7 +116,7 @@ class CRSA:
         self.turns = turns
         self.turns_history = OrderedDict()
 
-    def _get_turn_lexicon(self, turn, agent=None):
+    def _get_turn_world(self, turn, agent=None):
         turn_utterances = []
         for past_turns in range(turn+1):
             if past_turns % 2 == 0:
@@ -125,16 +125,19 @@ class CRSA:
                 turn_utterances.append(self.utterances_B)
 
         lexicon = getattr(self, f"lexicon_{agent}")
+        cost = getattr(self, f"cost_{agent}")
         
         turn_utterances_string = []
         turn_lexicon = []
+        turn_cost = []
         utt2idx = {u: i for i, u in enumerate(lexicon.keys())}
         for utterance in product(*turn_utterances):
             u = " ".join(utterance)
             turn_utterances_string.append(u)
             turn_lexicon.append(lexicon[u])
+            turn_cost.append(cost[utt2idx[u]])
         
-        return turn_utterances_string, np.asarray(turn_lexicon, dtype=float)
+        return turn_utterances_string, np.asarray(turn_lexicon, dtype=float), np.asarray(turn_cost, dtype=float)
 
     def run(self, output_dir: Path, verbose: bool = False):
 
@@ -151,14 +154,14 @@ class CRSA:
         logger.setLevel(logging.INFO)
 
         # Log configuration
-        logger.info(f"Running CRSA model for {self.turns} turns, max depth {self.max_depth} and tolerance {self.tolerance:.2e}")
+        logger.info(f"Running Multiturn Y-RSA model for {self.turns} turns, max depth {self.max_depth} and tolerance {self.tolerance:.2e}")
         logger.info("-" * 40)
         logger.info(
             f"\nAgent A's Lexicon:\n\n{pd.DataFrame.from_dict(self.lexicon_A, orient='index', columns=self.meanings_A)}\n\n"
             f"Agent B's Lexicon:\n\n{pd.DataFrame.from_dict(self.lexicon_B, orient='index', columns=self.meanings_B)}\n\n"
             f"Prior:\n\n{pd.DataFrame(self.prior.reshape(-1,len(self.categories)), index=pd.MultiIndex.from_product([self.meanings_A, self.meanings_B], names=['meanings_A','meanings_B']), columns=self.categories)}\n\n"
-            f"Costs of utterances from agent A: \n\n{pd.Series(self.cost_A, index=self.utterances_A).to_string()}\n\n"
-            f"Costs of utterances from agent B: \n\n{pd.Series(self.cost_B, index=self.utterances_B).to_string()}\n\n"
+            f"Costs of utterances from agent A: \n\n{pd.Series(self.cost_A, index=self.lexicon_A.keys()).to_string()}\n\n"
+            f"Costs of utterances from agent B: \n\n{pd.Series(self.cost_B, index=self.lexicon_B.keys()).to_string()}\n\n"
             f"Alpha: {self.alpha}\n"
         )
         logger.info("-" * 40 + "\n")
@@ -167,22 +170,22 @@ class CRSA:
         while turn < self.turns:
 
             ## Agent A speaks and Agent B listens
-            turn_utterances, turn_lexicon = self._get_turn_lexicon(turn, agent="A")
-            crsa_A = SingleCRSA(
+            turn_utterances, turn_lexicon, turn_cost = self._get_turn_world(turn, agent="A")
+            yrsa_A = YRSA(
                 meanings_A=self.meanings_A,
                 meanings_B=self.meanings_B,
                 categories=self.categories,
-                utterances=self.utterances_A,
-                lexicon=pd.DataFrame(turn_lexicon, index=turn_utterances, columns=self.meanings_A),
+                utterances=turn_utterances,
+                lexicon=turn_lexicon,
                 prior=self.prior,
-                cost=self.cost_A,
+                cost=turn_cost,
                 alpha=self.alpha,
                 max_depth=self.max_depth,
                 tolerance=self.tolerance,
             )
-            crsa_A.run(output_dir, verbose, prefix=f"agentA_turn{turn:02d}_")
-            crsa_A.save(output_dir, prefix=f"agentA_turn{turn:02d}_")
-            self.turns_history[turn] = crsa_A
+            yrsa_A.run(output_dir, verbose, prefix=f"agentA_turn{turn:02d}_")
+            yrsa_A.save(output_dir, prefix=f"agentA_turn{turn:02d}_")
+            self.turns_history[turn] = yrsa_A
             logger.info(f"Agent A's turn {turn} info logged into agentA_turn{turn:02d}_history.log")
 
             if turn == self.turns - 1:
@@ -190,22 +193,22 @@ class CRSA:
 
             ## Agent B speaks and Agent A listens
             turn += 1
-            turn_utterances, turn_lexicon = self._get_turn_lexicon(turn, agent="B")
-            crsa_B = SingleCRSA(
+            turn_utterances, turn_lexicon, turn_cost = self._get_turn_world(turn, agent="B")
+            yrsa_B = YRSA(
                 meanings_A=self.meanings_A,
                 meanings_B=self.meanings_B,
                 categories=self.categories,
-                utterances=self.utterances_B,
-                lexicon=pd.DataFrame(turn_lexicon, index=turn_utterances, columns=self.meanings_B),
+                utterances=turn_utterances,
+                lexicon=turn_lexicon,
                 prior=self.prior,
-                cost=self.cost_B,
+                cost=turn_cost,
                 alpha=self.alpha,
                 max_depth=self.max_depth,
                 tolerance=self.tolerance,
             )
-            crsa_B.run(output_dir, verbose, prefix=f"agentB_turn{turn:02d}_")
-            crsa_B.save(output_dir, prefix=f"agentB_turn{turn:02d}_")
-            self.turns_history[turn] = crsa_B
+            yrsa_B.run(output_dir, verbose, prefix=f"agentB_turn{turn:02d}_")
+            yrsa_B.save(output_dir, prefix=f"agentB_turn{turn:02d}_")
+            self.turns_history[turn] = yrsa_B
             logger.info(f"Agent B's turn {turn} info logged into agentB_turn{turn:02d}_history.log")
             logger.info("-" * 40 + "\n")
             turn += 1
@@ -255,7 +258,7 @@ class CRSA:
             args = yaml.safe_load(f)
         model = cls(**args)
         for turn in range(model.turns):
-            model.turns_history[turn] = SingleCRSA.load(output_dir, prefix=f"{prefix}turn{turn:02d}_")
+            model.turns_history[turn] = YRSA.load(output_dir, prefix=f"{prefix}turn{turn:02d}_")
         return model
         
 
@@ -264,5 +267,5 @@ class CRSA:
 if __name__ == "__main__":
     with open(Path("configs/worlds/multiround_toy_game.yaml"), "r") as f:
         args = yaml.safe_load(f)
-    model = CRSA(**args, alpha=1., max_depth=10)
+    model = MultiturnYRSA(**args, alpha=1., max_depth=10)
     print(model.get_utterances_for_turn(1))

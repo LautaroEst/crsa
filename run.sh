@@ -1,7 +1,8 @@
 #!/bin/bash -e
 
 # Source the Conda initialization script
-source ~/anaconda3/etc/profile.d/conda.sh
+# source ~/anaconda3/etc/profile.d/conda.sh
+source ~/miniforge3/etc/profile.d/conda.sh
 conda activate crsa
 
 # Experiments
@@ -20,8 +21,13 @@ python -m crsa.scripts.rsa_hyperparams \
 #     --alphas 0.1 1.0 \
 #     --tolerances 1e-3 1e-3
 
+# python -m crsa.scripts.multiyrsa_hyperparams \
+#     --world multiround_toy_game \
+#     --alphas 1.0 \
+#     --max_depths 3
+
 python -m crsa.scripts.crsa_hyperparams \
-    --world multiround_toy_game \
+    --world crsa_toy_game \
     --alphas 1.0 \
     --max_depths 3
 

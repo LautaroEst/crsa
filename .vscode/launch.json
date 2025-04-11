@@ -34,7 +34,7 @@
             "request": "launch",
             "module": "crsa.scripts.crsa_hyperparams",
             "args": [
-                "--world", "multiround_toy_game",
+                "--world", "crsa_toy_game",
                 "--alphas", "1.0",
                 "--max_depths", "2",
                 "-v"
