@@ -27,7 +27,7 @@ conda activate crsa
 #     --max_depths 3
 
 python -m crsa.scripts.toy_crsa \
-    --world find_a1 \
+    --world findA1 \
     --alphas 1.0 \
     --max_depths 3
 

@@ -7,6 +7,7 @@ import shutil
 import logging
 import time
 import matplotlib.pyplot as plt
+import numpy as np
 import seaborn as sns
 import pandas as pd
 
@@ -15,7 +16,8 @@ from ..src.utils import read_config_file
 
 
 
-def main(meanings_A: List[str],
+def main(
+    meanings_A: List[str],
     meanings_B: List[str],
     categories: List[str],
     utterances_A: List[str],
@@ -47,6 +49,11 @@ def main(meanings_A: List[str],
     logger.addHandler(file_handler)
     logger.setLevel(logging.INFO)
 
+    # Cast array arguments
+    prior = np.asarray(prior)
+    cost_A = np.asarray(cost_A)
+    cost_B = np.asarray(cost_B)
+
     # Check if RSA is possible
     if max_depths is None and tolerances is None:
         logger.error("Either max_depths or tolerances must be provided.")
@@ -72,9 +79,14 @@ def main(meanings_A: List[str],
         suboutput_dir.mkdir(parents=True, exist_ok=True)
 
         # Run CRSA
-        rsa = ToyCRSA(meanings_A, meanings_B, categories, utterances_A, utterances_B, prior, cost_A, cost_B, lexicon, alpha, max_depth, tolerance, turns)
+        rsa = ToyCRSA(meanings_A, meanings_B, categories, utterances_A, utterances_B, cost_A, cost_B, lexicon, prior, alpha, max_depth, tolerance, turns)
         rsa.run(suboutput_dir, verbose)
         rsa.save(suboutput_dir)
+
+    # Close logging
+    for handler in logger.handlers:
+        handler.close()
+        logger.removeHandler(handler)
 
 
 def setup():

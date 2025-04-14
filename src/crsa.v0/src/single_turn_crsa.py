@@ -249,7 +249,7 @@ class Ps:
         self._value = np.einsum(f"{agent_speaking}wu,abyw->abyw", speaker, self.get_value())
 
     def as_array(self):
-        
+        pass
 
 
 

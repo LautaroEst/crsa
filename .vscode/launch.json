@@ -32,11 +32,11 @@
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
             "request": "launch",
-            "module": "crsa.scripts.crsa_hyperparams",
+            "module": "crsa.scripts.toy_crsa",
             "args": [
-                "--world", "crsa_toy_game",
+                "--world", "findA1",
                 "--alphas", "1.0",
-                "--max_depths", "2",
+                "--max_depths", "3",
                 "-v"
             ]
         }
