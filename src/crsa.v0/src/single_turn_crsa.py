@@ -21,35 +21,47 @@ from .utils import (
 
 class Listener:
 
-    def __init__(self, categories, utterances, meanings_B, prior, lexicon):
+    # Listener(u,w,b,y) = L(y|u,w,b)
+    # Prior(a,b,y) = P(a,b,y)
+    # Lexicon(u,w,a) = Lexicon_A(u,w,a)
+
+    def __init__(self, categories, past_utterances, utterances, meanings_B, prior, lexicon):
         self.categories = categories
         self.meanings_B = meanings_B
+        self.past_utterances = past_utterances
         self.utterances = utterances
         self.prior = prior
         self.lexicon = lexicon
 
-        # Initialize with literal listener        
-        literal_listener = np.einsum('ua,aby->uby', lexicon, prior)
-        literal_listener = literal_listener / literal_listener.sum(axis=2, keepdims=True)
+        # Extract array from lexicon
+        lexicon_arr = lexicon.to_numpy()
+        groups = lexicon.columns.levels[0]
+        n_groups = len(groups)
+        n_features_per_group = len(lexicon.columns) // n_groups
+        lexicon_arr = lexicon_arr.reshape(len(lexicon), n_groups, n_features_per_group)
+
+        # Initialize with literal listener
+        literal_listener = np.einsum('uwa,aby->uwby', lexicon_arr, prior)
+        literal_listener = literal_listener / literal_listener.sum(axis=3, keepdims=True)
         self.history = [literal_listener]
 
-    def update(self, speaker):
+    def update(self, speaker, ps):
         """
         Update the listener based on the speaker
         """
-        pragmatic_listener = np.einsum("au,aby->uby", speaker, self.prior)
-        pragmatic_listener = pragmatic_listener / pragmatic_listener.sum(axis=2, keepdims=True)
+        pragmatic_listener = np.einsum("abyw,awu,aby->uwby", ps, speaker, self.prior)
+        pragmatic_listener = pragmatic_listener / pragmatic_listener.sum(axis=3, keepdims=True)
         self.history.append(pragmatic_listener)
 
     def get_literal_as_df(self):
-        return pd.DataFrame(self.history[0].reshape(-1,len(self.categories)), index=pd.MultiIndex.from_product([self.utterances, self.meanings_B], names=['utterances','meanings_B']), columns=self.categories)
+        return pd.DataFrame(self.history[0].reshape(-1,len(self.categories)), index=pd.MultiIndex.from_product([self.utterances, self.past_utterances, self.meanings_B], names=['utterances','past_utterances','meanings_B']), columns=self.categories)
     
     def get_literal_as_array(self):
         return self.history[0]
       
     @property
     def as_df(self):
-        return pd.DataFrame(self.as_array.reshape(-1,len(self.categories)), index=pd.MultiIndex.from_product([self.utterances, self.meanings_B], names=['utterances','meanings_B']), columns=self.categories)
+        return pd.DataFrame(self.as_array.reshape(-1,len(self.categories)), index=pd.MultiIndex.from_product([self.utterances, self.past_utterances, self.meanings_B], names=['utterances','past_utterances','meanings_B']), columns=self.categories)
     
     @property
     def as_array(self):
@@ -58,17 +70,23 @@ class Listener:
 
 class Speaker:
 
-    def __init__(self, meanings_A, utterances, prior, cost, alpha):
+    # Speaker(a,w,u) = S(u|a,w)
+    # Listener(u,w,b,y) = L(y|u,w,b)
+    # Prior(a,b,y) = P(a,b,y)
+    # Cost(u) = C(u)
+
+    def __init__(self, meanings_A, past_utterances, utterances, prior, cost, alpha):
         self.meanings_A = meanings_A
+        self.past_utterances = past_utterances
         self.utterances = utterances
         self.prior = prior
         self.cost = cost
         self.alpha = alpha
 
-        literal_speaker = np.ones((len(meanings_A), len(utterances))) * np.nan
+        literal_speaker = np.ones((len(meanings_A), len(past_utterances), len(utterances))) * np.nan
         self.history = [literal_speaker]
 
-    def update(self, listener):
+    def update(self, listener, ps):
         """
         Update the speaker based on the listener
         """
@@ -79,10 +97,19 @@ class Speaker:
         log_listener[mask] = np.log(listener[mask])
         log_listener[~mask] = -INF
 
-        cond_prior = self.prior / self.prior.sum(axis=1, keepdims=True).sum(axis=2, keepdims=True) # Cond(a,b,y) = P(b,y|a) = P(a,b,y) / P(a)
+        # Safe x
+        prior = self.prior.copy()
+        prior[prior == 0] = ZERO
+        cond_prior = prior / prior.sum(axis=1, keepdims=True).sum(axis=2, keepdims=True) # Cond(a,b,y) = P(b,y|a) = P(a,b,y) / P(a)
         cond_prior[cond_prior == 0] = ZERO
-        exp_term = np.einsum("aby,uby->au", cond_prior, log_listener)
-        pragmatic_speaker = softmax(self.alpha * (exp_term - self.cost.reshape(1,-1)), axis=1)
+
+        # Safe x/y        
+        ps_num = ps.copy()
+        ps_num[ps_num == 0] = ZERO
+        ps_den = np.einsum("abyw,aby->aw", ps, cond_prior)[:,np.newaxis,np.newaxis,:]
+        ps_frac = ps_num / ps_den
+        exp_term = np.einsum("abyw,aby,uwby->awu", ps_frac, cond_prior, log_listener)
+        pragmatic_speaker = softmax(self.alpha * (exp_term - self.cost.reshape(1,1,-1)), axis=2)
         self.history.append(pragmatic_speaker)
 
     @property
@@ -96,13 +123,21 @@ class Speaker:
 
 class CRSAGain:
 
-    def __init__(self):
+    # Ps(a,b,y,w) = Ps(w|a,b,y)
+    # Prior(a,b,y) = P(a,b,y)
+    # Speaker(a,w,u) = S(u|a,w)
+    # Listener(u,w,b,y) = L(y|u,w,b)
+    # Cost(u) = C(u)
+    # Gain = alpha * E[L(Y|U,WA,MB)] + Hs(U|MA,WA)
+
+    def __init__(self, ps):
+        self.ps = ps.get_value()
         self.cond_entropy_history = []
         self.listener_value_history = []
         self.gain_history = []
         self.coop_index_history = []
 
-    def H_S_of_U_given_MA(self, prior, speaker):
+    def H_S_of_U_given_MA_WA(self, prior, speaker):
         """
         Compute the conditional mutual information of the utterances given the meanings.
 
@@ -114,12 +149,20 @@ class CRSAGain:
             The speaker probability of each meaning given each utterance.
 
         """
-        prior = prior.sum(axis=1).sum(axis=1) # marginalize over meanings_B and categories
+
+        # Compute safe x * log(x)
         mask = speaker > 0
-        log_speaker = np.zeros_like(speaker) # approximate x * log(x) to 0
-        log_speaker[mask] = np.log(speaker[mask])
-        log_speaker[~mask] = ZERO
-        cond_entropy = -np.sum(speaker * prior.reshape(-1,1) * log_speaker)
+        speaker_times_log_speaker = np.zeros_like(speaker) 
+        speaker_times_log_speaker[mask] = np.log(speaker[mask])
+        speaker_times_log_speaker[~mask] = ZERO # approximate x * log(x) to 0
+        speaker_times_log_speaker = speaker * speaker_times_log_speaker
+
+        # Safe x
+        prior = prior.copy()
+        prior[prior == 0] = ZERO
+        
+        # speaker = S(a,w,u) = S(u|a,w), prior = P(a,b,y) = P(a,b,y), ps = Ps(a,b,y,w) = Ps(w|a,b,y)
+        cond_entropy = - np.einsum("awu,aby,abyw->", speaker_times_log_speaker, prior, self.ps) # Hs(U|MA,WA)
         self.cond_entropy_history.append(cond_entropy)
         return cond_entropy
 
@@ -139,16 +182,21 @@ class CRSAGain:
             The cost of each utterance.
         """
         
+        # Safe logarithm
         log_listener = np.zeros_like(listener)
         mask = listener > 0
         log_listener[mask] = np.log(listener[mask])
         log_listener[~mask] = -INF
-        V_L = log_listener - cost.reshape(-1,1,1) # V_L(u,b,y) = log(P(y|u,b)) - C(u)
+        V_L = log_listener - cost.reshape(-1,1,1,1) # V_L(u,w,b,y) = log(P(y|u,w,b)) - C(u)
 
-        joint_speaker = np.expand_dims(prior, axis=1) * np.expand_dims(speaker, axis=(2,3)) # P_S(a,u,b,y) = P(a,b,y) * S(a,u)  
-        joint_speaker = joint_speaker.sum(axis=0) # P_S(u,b,y)
-        joint_speaker[joint_speaker == 0] = ZERO
-        expected_V_L = np.sum(joint_speaker * V_L)
+        # Safe x
+        prior = prior.copy()
+        prior[prior == 0] = ZERO
+        Ps = self.ps.copy()
+        Ps[Ps == 0] = ZERO
+        
+        # V_L = V_L(u,w,b,y), prior = P(a,b,y) = P(a,b,y), ps = Ps(a,b,y,w) = Ps(w|a,b,y)
+        expected_V_L = np.einsum("uwby,aby,abyw->", V_L, prior, self.ps)
         self.listener_value_history.append(expected_V_L)
         return expected_V_L
     
@@ -180,6 +228,31 @@ class CRSAGain:
 
 
 
+class Ps:
+
+    # Ps(a,b,y,w) = P_S(w|a,b,y)
+
+    def __init__(self, meanings_A, meanings_B, past_utterances):
+        self.meanings_A = meanings_A
+        self.meanings_B = meanings_B
+        self.past_utterances = past_utterances
+        self.history = []
+        self._value = None
+    
+    def get_value(self):
+        if self._value is None:
+            return np.ones((len(self.meanings_A), len(self.meanings_B), len(self.past_utterances)), dtype=float)
+        return self._value
+
+    def update(self, speaker, agent_speaking="a"):
+        # speaker = S(a_or_b,w,u)
+        self._value = np.einsum(f"{agent_speaking}wu,abyw->abyw", speaker, self.get_value())
+
+    def as_array(self):
+        
+
+
+
 class SingleCRSA:
     """
     Y-Rational Speech Act (RSA) model from the listener's perspective
@@ -204,7 +277,10 @@ class SingleCRSA:
         Tolerance for convergence
     """
 
-    def __init__(self, meanings_A, meanings_B, categories, utterances, lexicon, prior=None, cost=None, alpha=1., max_depth=None, tolerance=1e-6):
+    def __init__(self, ps, meanings_A, meanings_B, categories, past_utterances, utterances, lexicon, prior=None, cost=None, alpha=1., max_depth=None, tolerance=1e-6):
+
+        # Ps(a,b,y,w): Conditional prob for the past utterances
+        self.ps = ps 
 
         # Check meanings and utterances
         if not is_list_of_strings(meanings_A) or not is_list_of_strings(meanings_B) or not is_list_of_strings(categories):
@@ -215,10 +291,13 @@ class SingleCRSA:
         if not is_list_of_strings(utterances):
             raise ValueError("utterances should be a list of strings")
         self.utterances = utterances
+        if not is_list_of_strings(past_utterances):
+            raise ValueError("past_utterances should be a list of strings")
+        self.past_utterances = past_utterances
 
         # Check lexicon
-        if not isinstance(lexicon, pd.DataFrame) or len(lexicon.columns) != len(meanings_A):
-            raise ValueError("lexicon should be a pandas DataFrame with columns equal to the number of meanings")
+        if not isinstance(lexicon, pd.DataFrame) or lexicon.shape != (len(utterances), len(meanings_A) * max(1,len(past_utterances))):
+            raise ValueError("lexicon should be a pandas DataFrame of shape (len(utterances), len(meanings_A) * len(past_utterances))")
         self.lexicon = lexicon
 
         # Check prior
@@ -299,9 +378,10 @@ class SingleCRSA:
         logger.info("-" * 40 + "\n")
         
         # Init listener and speaker
-        self.listener = Listener(self.categories, self.utterances, self.meanings_B, self.prior, self.lexicon.values)
-        self.speaker = Speaker(self.meanings_A, self.utterances, self.prior, self.cost, self.alpha)
-        self.gain = CRSAGain()
+        self.listener = Listener(self.categories, self.past_utterances, self.utterances, self.meanings_B, self.prior, self.lexicon)
+        self.speaker = Speaker(self.meanings_A, self.past_utterances, self.utterances, self.prior, self.cost, self.alpha)
+        self.ps = Ps(self.meanings_A, self.meanings_B, self.past_utterances)
+        self.gain = CRSAGain(self.ps)
         gain = self.gain.compute_gain(self.listener.as_array, self.speaker.as_array, self.prior, self.cost, self.alpha)
         logger.info(f"Literal listener:\n{self.listener.get_literal_as_df()}\n\n")
         logger.info(f"Initial gain: {gain:.4f}\n")
@@ -311,7 +391,7 @@ class SingleCRSA:
         i = 0
         while i < self.max_depth:
             # Update speaker
-            self.speaker.update(self.listener.as_array)
+            self.speaker.update(self.listener.as_array, self.ps.as_array)
             logger.info(f"Pragmatic speaker at step {i+1}:\n{self.speaker.as_df}\n")
             
             # Update listener

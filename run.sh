@@ -1,15 +1,15 @@
 #!/bin/bash -e
 
 # Source the Conda initialization script
-# source ~/anaconda3/etc/profile.d/conda.sh
-source ~/miniforge3/etc/profile.d/conda.sh
+source ~/anaconda3/etc/profile.d/conda.sh
+# source ~/miniforge3/etc/profile.d/conda.sh
 conda activate crsa
 
 # Experiments
-python -m crsa.scripts.rsa_hyperparams \
-    --world no_structural_zeros \
-    --alphas 0.1 0.5 1.0 2.0 \
-    --max_depths 100 100 100 100
+# python -m crsa.scripts.rsa_hyperparams \
+#     --world no_structural_zeros \
+#     --alphas 0.1 0.5 1.0 2.0 \
+#     --max_depths 100 100 100 100
 
 # python -m crsa.scripts.rsa_dataset \
 #     --dataset "tuna" \
@@ -26,8 +26,8 @@ python -m crsa.scripts.rsa_hyperparams \
 #     --alphas 1.0 \
 #     --max_depths 3
 
-python -m crsa.scripts.crsa_hyperparams \
-    --world crsa_toy_game \
+python -m crsa.scripts.toy_crsa \
+    --world find_a1 \
     --alphas 1.0 \
     --max_depths 3
 

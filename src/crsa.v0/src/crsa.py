@@ -20,6 +20,9 @@ from .utils import (
 from .single_turn_crsa import SingleCRSA
 
 
+            
+
+
 
 
 class CRSA:
@@ -118,23 +121,35 @@ class CRSA:
 
     def _get_turn_lexicon(self, turn, agent=None):
         turn_utterances = []
-        for past_turns in range(turn+1):
+        for past_turns in range(turn):
             if past_turns % 2 == 0:
                 turn_utterances.append(self.utterances_A)
             else:
                 turn_utterances.append(self.utterances_B)
 
         lexicon = getattr(self, f"lexicon_{agent}")
+        utterances = getattr(self, f"utterances_{agent}")
+        meanings = getattr(self, f"meanings_{agent}")
         
-        turn_utterances_string = []
+        past_utterances = []
+        if turn_utterances:
+            for utterance in product(*turn_utterances):
+                u = " ".join(utterance)
+                past_utterances.append(u)
+        
         turn_lexicon = []
-        utt2idx = {u: i for i, u in enumerate(lexicon.keys())}
-        for utterance in product(*turn_utterances):
-            u = " ".join(utterance)
-            turn_utterances_string.append(u)
-            turn_lexicon.append(lexicon[u])
+        if not past_utterances:
+            for lu in utterances:
+                turn_lexicon.append(lexicon[lu])
+            turn_lexicon = pd.DataFrame(turn_lexicon, index=utterances, columns=pd.MultiIndex.from_product([meanings, [""]], names=[f"meanings_{agent}", "past_utterances"]))
+        else:
+            for pu in past_utterances:
+                turn_lexicon.append([])
+                for lu in utterances:
+                    turn_lexicon[-1].append(lexicon[pu + " " + lu])
+            turn_lexicon = pd.DataFrame(turn_lexicon, index=utterances, columns=pd.MultiIndex.from_product([meanings, past_utterances], names=[f"meanings_{agent}", "past_utterances"]))
         
-        return turn_utterances_string, np.asarray(turn_lexicon, dtype=float)
+        return past_utterances, turn_lexicon
 
     def run(self, output_dir: Path, verbose: bool = False):
 
@@ -167,13 +182,14 @@ class CRSA:
         while turn < self.turns:
 
             ## Agent A speaks and Agent B listens
-            turn_utterances, turn_lexicon = self._get_turn_lexicon(turn, agent="A")
+            past_utterances, turn_lexicon = self._get_turn_lexicon(turn, agent="A")
             crsa_A = SingleCRSA(
                 meanings_A=self.meanings_A,
                 meanings_B=self.meanings_B,
                 categories=self.categories,
+                past_utterances=past_utterances,
                 utterances=self.utterances_A,
-                lexicon=pd.DataFrame(turn_lexicon, index=turn_utterances, columns=self.meanings_A),
+                lexicon=turn_lexicon,
                 prior=self.prior,
                 cost=self.cost_A,
                 alpha=self.alpha,
