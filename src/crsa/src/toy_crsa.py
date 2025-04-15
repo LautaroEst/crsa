@@ -5,16 +5,15 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
-from .lexicons import get_lexicon_cls
 from .toy_crsa_turn import ToyCRSATurn
-from .toy_dialog_model import ToyDialogModel
+from .dialog_models import DialogModelFromSpeaker
 from .utils import save_yaml
 
 
 
 class ToyCRSA:
 
-    def __init__(self, meanings_A, meanings_B, categories, utterances_A, utterances_B, cost_A, cost_B, lexicon, prior, alpha=1.0, max_depth=None, tolerance=1e-6, turns=1):
+    def __init__(self, meanings_A, meanings_B, categories, utterances_A, utterances_B, lexicon_A, lexicon_B, prior, cost_A, cost_B, alpha=1.0, max_depth=None, tolerance=1e-6, turns=1):
         
         # World parameters        
         self.meanings_A = meanings_A
@@ -22,7 +21,8 @@ class ToyCRSA:
         self.categories = categories
         self.utterances_A = utterances_A
         self.utterances_B = utterances_B
-        self.lxn_cls = get_lexicon_cls(lexicon)
+        self.lexicon_A = lexicon_A
+        self.lexicon_B = lexicon_B
         self.prior = prior
 
         # Pragmatic parameters
@@ -50,23 +50,30 @@ class ToyCRSA:
         logger.setLevel(logging.INFO)
 
         # Log configuration
-        logger.info(f"Running CRSA model for {self.turns} turns, max depth {self.max_depth} and tolerance {self.tolerance:.2e}")
+        logger.info(f"Running CRSA model for {self.turns} turns, alpha={self.alpha}, max_depth={self.max_depth} and tolerance={self.tolerance}.")
         logger.info("-" * 40 + "\n")
         logger.info(
+            f"Meanings A: {self.meanings_A}\n"
+            f"Meanings B: {self.meanings_B}\n"
+            f"Categories: {self.categories}\n\n"
             f"Prior:\n\n{pd.DataFrame(self.prior.reshape(-1,len(self.categories)), index=pd.MultiIndex.from_product([self.meanings_A, self.meanings_B], names=['meanings_A','meanings_B']), columns=self.categories)}\n\n"
+            f"Lexicon A:\n\n{pd.DataFrame(self.lexicon_A, index=self.utterances_A, columns=self.meanings_A)}\n\n"
+            f"Lexicon B:\n\n{pd.DataFrame(self.lexicon_B, index=self.utterances_B, columns=self.meanings_B)}\n\n"
             f"Costs of utterances from agent A: \n\n{pd.Series(self.cost_A, index=self.utterances_A).to_string()}\n\n"
             f"Costs of utterances from agent B: \n\n{pd.Series(self.cost_B, index=self.utterances_B).to_string()}\n\n"
             f"Alpha: {self.alpha}\n"
         )
         logger.info("-" * 40 + "\n")
 
+        # Run CRSA turns
         self.turns_history = []
-        self.dialog_model = ToyDialogModel(self.meanings_A, self.meanings_B, self.utterances_A, self.utterances_B)
+        dialog_model = DialogModelFromSpeaker(self.meanings_A, self.meanings_B, self.utterances_A, self.utterances_B)
         for current_turn, speaking_agent in zip(range(1, self.turns+1), cycle("AB")):
             listen_agent = "A" if speaking_agent == "B" else "B"
             logger.info(f"Turn {current_turn}: Agent {speaking_agent} speaks and Agent {listen_agent} listens\n")
-            self._run_turn(current_turn, output_dir, verbose=verbose, prefix=f"agent{speaking_agent}_turn{current_turn:02d}_")
-            self.dialog_model.update(self.turns_history[-1].speaker)
+            self._run_turn(dialog_model, current_turn, output_dir, verbose=verbose, prefix=f"turn{current_turn:02d}_")
+            dialog_model.update(self.turns_history[-1].speaker)
+        self.dialog_model = dialog_model
             
         # Log final state
         logger.info("Reached final turn")
@@ -78,12 +85,12 @@ class ToyCRSA:
             logger.removeHandler(handler)
 
 
-    def _run_turn(self, current_turn, output_dir, verbose=False, prefix=""):
+    def _run_turn(self, dialog_model, current_turn, output_dir, verbose=False, prefix=""):
         meanings_S = self.meanings_A if current_turn % 2 == 1 else self.meanings_B
         meanings_L = self.meanings_B if current_turn % 2 == 1 else self.meanings_A
         utterances = self.utterances_A if current_turn % 2 == 1 else self.utterances_B
+        lexicon = self.lexicon_A if current_turn % 2 == 1 else self.lexicon_B
         cost = self.cost_A if current_turn % 2 == 1 else self.cost_B
-        lexicon = self.lxn_cls(self.meanings_A, self.meanings_B, self.utterances_A, self.utterances_B, current_turn=current_turn)
         
         model = ToyCRSATurn(
             meanings_S=meanings_S,
@@ -92,14 +99,12 @@ class ToyCRSA:
             utterances=utterances,
             prior=self.prior,
             lexicon=lexicon,
-            dialog_model=self.dialog_model,
             cost=cost,
             alpha=self.alpha,
             max_depth=self.max_depth,
             tolerance=self.tolerance
         )
-        model.run(output_dir, verbose, prefix)
-        model.save(output_dir, prefix)
+        model.run(dialog_model, output_dir, verbose, prefix)
         self.turns_history.append(model)
             
 
@@ -110,7 +115,8 @@ class ToyCRSA:
             "categories": self.categories,
             "utterances_A": self.utterances_A,
             "utterances_B": self.utterances_B,
-            "lexicon": self.lxn_cls.NAME,
+            "lexicon_A": self.lexicon_A.tolist(),
+            "lexicon_B": self.lexicon_B.tolist(),
             "prior": self.prior.tolist(),
             "cost_A": self.cost_A.tolist(),
             "cost_B": self.cost_B.tolist(),
@@ -131,7 +137,8 @@ class ToyCRSA:
         with open(output_dir / f"{prefix}args.yaml", "r") as f:
             args = yaml.safe_load(f)
         model = cls(**args)
+        model.dialog_model = DialogModelFromSpeaker.load(output_dir, prefix=f"{prefix}dialog_model_")
         for turn in range(model.turns):
             model.turns_history[turn] = ToyCRSATurn.load(output_dir, prefix=f"{prefix}turn{turn:02d}_")
-        model.dialog_model = ToyDialogModel.load(output_dir, prefix=f"{prefix}dialog_model_")
+
         return model

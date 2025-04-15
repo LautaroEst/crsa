@@ -22,7 +22,8 @@ def main(
     categories: List[str],
     utterances_A: List[str],
     utterances_B: List[str],
-    lexicon: str,
+    lexicon_A: List[List[int]],
+    lexicon_B: List[List[int]],
     prior: List[List[List[float]]],
     cost_A: List[float],
     cost_B: List[float],
@@ -50,7 +51,10 @@ def main(
     logger.setLevel(logging.INFO)
 
     # Cast array arguments
+    lexicon_A = np.asarray(lexicon_A)
+    lexicon_B = np.asarray(lexicon_B)
     prior = np.asarray(prior)
+    prior = prior / np.sum(prior)
     cost_A = np.asarray(cost_A)
     cost_B = np.asarray(cost_B)
 
@@ -79,9 +83,24 @@ def main(
         suboutput_dir.mkdir(parents=True, exist_ok=True)
 
         # Run CRSA
-        rsa = ToyCRSA(meanings_A, meanings_B, categories, utterances_A, utterances_B, cost_A, cost_B, lexicon, prior, alpha, max_depth, tolerance, turns)
-        rsa.run(suboutput_dir, verbose)
-        rsa.save(suboutput_dir)
+        model = ToyCRSA(
+            meanings_A=meanings_A,
+            meanings_B=meanings_B,
+            categories=categories,
+            utterances_A=utterances_A,
+            utterances_B=utterances_B,
+            lexicon_A=lexicon_A,
+            lexicon_B=lexicon_B,
+            prior=prior,
+            cost_A=cost_A,
+            cost_B=cost_B,
+            alpha=alpha,
+            max_depth=max_depth,
+            tolerance=tolerance,
+            turns=turns
+        )
+        model.run(suboutput_dir, verbose)
+        model.save(suboutput_dir)
 
     # Close logging
     for handler in logger.handlers:

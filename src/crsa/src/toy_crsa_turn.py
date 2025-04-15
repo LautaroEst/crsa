@@ -6,8 +6,6 @@ import numpy as np
 import yaml
 
 from .utils import save_yaml
-from .lexicons import get_lexicon_cls
-from .toy_dialog_model import ToyDialogModel
 
 
 class Listener:
@@ -46,7 +44,6 @@ class ToyCRSATurn:
         utterances,
         prior,
         lexicon,
-        dialog_model,
         cost,
         alpha,
         max_depth,
@@ -58,20 +55,20 @@ class ToyCRSATurn:
         self.utterances = utterances
         self.cost = cost
         self.lexicon = lexicon
-        self.dialog_model = dialog_model
         self.prior = prior
         self.alpha = alpha
         self.max_depth = max_depth
         self.tolerance = tolerance
 
-        self.speaker = Speaker(meanings_S, utterances, lexicon.past_utterances, cost)
-        self.listener = Listener(categories, meanings_L, utterances, lexicon.past_utterances, prior)
+        self.speaker = None
+        self.listener = None
+        self.gain = None
+
+    def run(self, dialog_model, output_dir, verbose=False, prefix=""):
+        self.speaker = Speaker(self.meanings_S, self.utterances, dialog_model.past_utterances, self.cost)
+        self.listener = Listener(self.categories, self.meanings_L, self.utterances, dialog_model.past_utterances, self.prior)
         self.gain = CRSAGain()
 
-
-    def run(self, output_dir, verbose=False, prefix=""):
-        # Run the RSA model for the current turn
-        pass
 
     @property
     def history(self):
@@ -94,7 +91,7 @@ class ToyCRSATurn:
             "categories": self.categories,
             "utterances": self.utterances,
             "prior": self.prior.tolist(),
-            "lexicon": self.lexicon.NAME,
+            "lexicon": self.lexicon.tolist(),
             "cost": self.cost.tolist(),
             "alpha": self.alpha,
             "max_depth": self.max_depth,
@@ -109,21 +106,14 @@ class ToyCRSATurn:
                 "cond_entropy": np.asarray(self.gain.cond_entropy_history),
                 "listener_value": np.asarray(self.gain.listener_value_history),
                 "gain": np.asarray(self.gain.gain_history),
-                "lexicon": self.lexicon.to_dict(),
-                "dialog_model": self.dialog_model.to_dict(),
             }, f)
 
     @classmethod
     def load(cls, output_dir: Path, prefix: str = ""):
         with open(output_dir / "args.yaml", "r") as f:
             args = yaml.safe_load(f)
-        lxn_cls_name = args.pop("lexicon")
-
         with open(output_dir / f"{prefix}history.pkl", "rb") as f:
             history = pickle.load(f)
-        args["lexicon"] = get_lexicon_cls(lxn_cls_name).from_dict(history["lexicon"])
-        args["dialog_model"] = ToyDialogModel.from_dict(history["dialog_model"])
-
         model = cls(**args)
         model.listener = Listener(model.categories, model.meanings, model.utterances, model.lexicon.past_utterances, model.prior, model.lexicon)
         model.listener.history = history["listeners"]
