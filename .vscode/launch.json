@@ -32,11 +32,12 @@
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
             "request": "launch",
-            "module": "crsa.scripts.toy_crsa",
+            "module": "crsa.scripts.parameters",
             "args": [
-                "--world", "findA1",
-                "--alphas", "1.0",
-                "--max_depths", "3",
+                "--world", "findA1_simple",
+                "--pasts", "1st 2nd",
+                "--alphas", "2.0",
+                "--max_depths", "4",
                 "-v"
             ]
         }

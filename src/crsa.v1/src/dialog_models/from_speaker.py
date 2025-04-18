@@ -3,6 +3,7 @@
 from pathlib import Path
 import pickle
 
+import numpy as np
 import yaml
 
 from .base import BaseDialogModel
@@ -26,18 +27,23 @@ class DialogModelFromSpeaker(BaseDialogModel):
             "A": utterances_A,
             "B": utterances_B,
         }
-        self.past_utterances = []
+        self.speakers = {
+            "A": [],
+            "B": [],
+        }
 
-    def update(self, speaker, agent="A"):
-        if not self.past_utterances:
-            self.past_utterances.extend(self.utterances[agent])
+    def update(self, speaker):
+        if len(self.speakers["A"]) == len(self.speakers["B"]):
+            self.speakers["A"].append(speaker)
         else:
-            new_utterances = []
-            for u in self.past_utterances:
-                for u_ in self.utterances[agent]:
-                    new_utterances.append(u + " " + u_)
-            self.past_utterances = new_utterances
-                
+            self.speakers["B"].append(speaker)
+
+
+        
+        
+    @property
+    def as_array(self):
+        return self.history[-1]
             
 
     def save(self, output_dir: Path, prefix: str = ""):
