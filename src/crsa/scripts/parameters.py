@@ -1,5 +1,6 @@
 
 import argparse
+from itertools import cycle
 from pathlib import Path
 import sys
 from typing import List, Optional, Tuple
@@ -44,7 +45,7 @@ def plot_history(root_results_dir, past_utterances, alphas, max_depths, toleranc
         ax[-1,j].set_xlabel("Iteration")
 
     # Unified legend and title
-    fig.suptitle(f"CRSA with past utterances: {', '.join(past_utterances)}", fontsize=16)
+    fig.suptitle(f"CRSA with past utterances: {past_utterances}", fontsize=16)
     ax[0,-1].legend([f"$\\alpha={alpha},\,D_{{max}}={max_depth},\,tol={tolerance:.2g}$" for (alpha, max_depth, tolerance) in zip(alphas, max_depths, tolerances)], loc="upper right", bbox_to_anchor=(1.8, 1))
     fig.tight_layout(pad=2.3)
     plt.savefig(root_results_dir / "asymptotic_analysis.pdf")
@@ -82,7 +83,7 @@ def plot_initial_final(root_results_dir, past_utterances, alphas, max_depths, to
         ax[turn,0].set_ylabel(f"Turn {turn+1}")
 
     # Unified legend and title
-    fig.suptitle(f"CRSA with past utterances: {', '.join(past_utterances)}", fontsize=16)
+    fig.suptitle(f"CRSA with past utterances: {past_utterances}", fontsize=16)
     fig.tight_layout(pad=2.3)
     plt.savefig(root_results_dir / "initial_final.pdf")
         
@@ -139,10 +140,15 @@ def main(
     for past_utterances in pasts:
 
         # Split past_utterances
-        past_utterances = past_utterances.split(" ") if past_utterances != "" else []
+        if past_utterances != "":
+            past_utterances = [{"speaker": speaker, "utterance": utt} for speaker, utt in zip(cycle("AB"),past_utterances.split(" "))]
+            speaker_now = "A" if past_utterances[-1]["speaker"] == "B" else "B"
+        else:
+            past_utterances = []
+            speaker_now = "A"
 
         # Create past utterances string
-        past_string = "_".join(past_utterances)
+        past_string = "_".join([data["utterance"] for data in past_utterances])
 
         for alpha, max_depth, tolerance in zip(alphas, max_depths, tolerances):
 
@@ -157,6 +163,7 @@ def main(
 
             # Run CRSA
             model = CRSA(
+                speaker_now=speaker_now,
                 meanings_A=meanings_A,
                 meanings_B=meanings_B,
                 categories=categories,
@@ -218,7 +225,7 @@ def setup():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Update configuration
-    config["pasts"] = args.pasts
+    config["pasts"] = args.pasts #if isinstance(args.pasts, list) else [args.pasts]
     config["alphas"] = args.alphas
     config["max_depths"] = args.max_depths
     config["tolerances"] = args.tolerances

@@ -13,9 +13,10 @@ from .utils import save_yaml
 
 class CRSA:
 
-    def __init__(self, meanings_A, meanings_B, categories, utterances_A, utterances_B, lexicon_A, lexicon_B, prior, past_utterances, cost_A=None, cost_B=None, alpha=1.0, max_depth=None, tolerance=1e-6):
+    def __init__(self, speaker_now, meanings_A, meanings_B, categories, utterances_A, utterances_B, lexicon_A, lexicon_B, prior, past_utterances, cost_A=None, cost_B=None, alpha=1.0, max_depth=None, tolerance=1e-6):
         
-        # World parameters        
+        # World parameters
+        self.speaker_now = speaker_now        
         self.meanings_A = meanings_A
         self.meanings_B = meanings_B
         self.categories = categories
@@ -38,10 +39,6 @@ class CRSA:
 
         # History
         self.turns_history = []
-        self.speakers = {
-            "A": [],
-            "B": []
-        }
 
 
     def run(self, output_dir=None, verbose=False):
@@ -78,16 +75,22 @@ class CRSA:
 
         # Run CRSA turns
         turns = len(self.past_utterances) + 1
-        for current_turn, speaking_agent in zip(range(1, turns+1), cycle("AB")):
+        for current_turn in range(1, turns + 1):
+
+            if not self.past_utterances:
+                speaking_agent = self.speaker_now
+                past_utterances = []
+            else:
+                speaking_agent = self.past_utterances[current_turn-1]["speaker"] if current_turn <= len(self.past_utterances) else self.speaker_now
+                past_utterances = self.past_utterances[:current_turn-1]
+            listen_agent = "A" if speaking_agent == "B" else "B"
 
             # Log turn information
-            listen_agent = "A" if speaking_agent == "B" else "B"
             logger.info(f"Turn {current_turn}: Agent {speaking_agent} speaks and Agent {listen_agent} listens\n")
             
             # Run CRSA for the turn
-            past_utterances = self.past_utterances[:current_turn-1]
-            self._run_turn(past_utterances, output_dir, verbose=verbose, prefix=f"turn{current_turn:02d}_")
-            self._update_speakers(self.turns_history[-1].speaker)
+            model = self._run_turn(past_utterances, speaking_agent, output_dir, verbose=verbose, prefix=f"turn{current_turn:02d}_")
+            self.turns_history.append(model)
             
         # Log final state
         logger.info("Reached final turn")
@@ -98,26 +101,15 @@ class CRSA:
             handler.close()
             logger.removeHandler(handler)
 
+    def _run_turn(self, past_utterances, speaker="A", output_dir=None, verbose=False, prefix=""):
+        meanings_S = self.meanings_A if speaker == "A" else self.meanings_B
+        meanings_L = self.meanings_B if speaker == "A" else self.meanings_A
+        utterances = self.utterances_A if speaker == "A" else self.utterances_B
+        lexicon = self.lexicon_A if speaker == "A" else self.lexicon_B
+        cost = self.cost_A if speaker == "A" else self.cost_B
+        prior = self.prior.copy() if speaker == "A" else self.prior.copy().transpose(1, 0, 2)
+        ds, dl = self._compute_dialog_model(past_utterances, speaker)
 
-    def _update_speakers(self, speaker):
-        if len(self.speakers["A"]) == len(self.speakers["B"]):
-            # speaker(a,u) = S(u|a)
-            self.speakers["A"].append(speaker.as_array)
-        else:
-            # speaker(b,u) = S(u|b)
-            self.speakers["B"].append(speaker.as_array)
-
-
-    def _run_turn(self, past_utterances, output_dir=None, verbose=False, prefix=""):
-        current_turn = len(past_utterances) + 1
-        meanings_S = self.meanings_A if current_turn % 2 == 1 else self.meanings_B
-        meanings_L = self.meanings_B if current_turn % 2 == 1 else self.meanings_A
-        utterances = self.utterances_A if current_turn % 2 == 1 else self.utterances_B
-        lexicon = self.lexicon_A if current_turn % 2 == 1 else self.lexicon_B
-        cost = self.cost_A if current_turn % 2 == 1 else self.cost_B
-        prior = self.prior.copy() if current_turn % 2 == 1 else self.prior.copy().transpose(1, 0, 2)
-        
-        dm_s, dm_l = self._compute_dialog_model(past_utterances)
         model = CRSATurn(
             meanings_S=meanings_S,
             meanings_L=meanings_L,
@@ -126,49 +118,45 @@ class CRSA:
             prior=prior,
             lexicon=lexicon,
             past_utterances=past_utterances,
-            dm_s=dm_s,
-            dm_l=dm_l,
+            ds=ds,
+            dl=dl,
             cost=cost,
             alpha=self.alpha,
             max_depth=self.max_depth,
             tolerance=self.tolerance
         )
         model.run(output_dir, verbose, prefix)
-        self.turns_history.append(model)
-            
-    def _compute_dialog_model(self, past_utterances):
-        if not self.turns_history:
-            return None, None
-
-        dm_a, dm_b = [], []
-        for i, utt in enumerate(past_utterances):
-            if i % 2 == 0:
-                idx_a = self.utterances_A.index(utt)
-                dm_a.append(self.speakers["A"][i // 2][:, idx_a])
-            else:
-                idx_b = self.utterances_B.index(utt)
-                dm_b.append(self.speakers["B"][i // 2][:, idx_b])
-        if len(dm_b) == 0:
-            dm_a = dm_a[0].copy()
-            dm_b = np.ones(len(self.meanings_B))
-        else:
-            dm_a = np.prod(dm_a, axis=0)
-            dm_b = np.prod(dm_b, axis=0)
-
-        if len(past_utterances) % 2 == 0:
-            dm_s = dm_a
-            dm_l = dm_b
-        else:
-            dm_s = dm_b
-            dm_l = dm_a
-
-        return dm_s, dm_l
+        return model
     
+    def _compute_dialog_model(self, past_utterances, speaker):
+        if not past_utterances:
+            return None, None
+        
+        ds, dl = [], []
+        for data, model in zip(past_utterances, self.turns_history):
+            if data["speaker"] == speaker:
+                utterances_S = self.utterances_A if speaker == "A" else self.utterances_B
+                utt_idx = utterances_S.index(data["utterance"])
+                ds.append(model.speaker.as_array[:, utt_idx])
+            else:
+                utterances_L = self.utterances_B if speaker == "A" else self.utterances_A
+                utt_idx = utterances_L.index(data["utterance"])
+                dl.append(model.speaker.as_array[:, utt_idx])
+        
+        ds_arr = np.ones(len(self.meanings_A if speaker == "A" else self.meanings_B))
+        for d in ds:
+            ds_arr *= d
 
+        dl_arr = np.ones(len(self.meanings_B if speaker == "A" else self.meanings_A))
+        for d in dl:
+            dl_arr *= d
+        
+        return ds_arr, dl_arr
             
 
     def save(self, output_dir: Path, prefix: str = ""):
         args = {
+            "speaker_now": self.speaker_now,
             "meanings_A": self.meanings_A,
             "meanings_B": self.meanings_B,
             "categories": self.categories,

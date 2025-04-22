@@ -40,7 +40,7 @@ class Listener:
         self.history.append(literal_listener)
     
     def update(self, speaker):
-        speaker_arr = speaker.as_array
+        speaker_arr = speaker.as_array.copy()
         speaker_arr[speaker_arr <= ZERO] = ZERO
 
         if self.dm is None:
@@ -98,7 +98,7 @@ class Speaker:
         prior_y_given_ab = prior / prior_ab[:,:,np.newaxis] # P(y|a,b)
 
         # Compute the log_listener
-        listener_arr = listener.as_array
+        listener_arr = listener.as_array.copy()
         mask = listener_arr > 0
         log_listener = np.zeros_like(listener_arr, dtype=float)
         log_listener[mask] = np.log(listener_arr[mask])
@@ -174,8 +174,8 @@ class CRSATurn:
         prior,
         lexicon,
         past_utterances,
-        dm_s,
-        dm_l,
+        ds,
+        dl,
         cost,
         alpha,
         max_depth,
@@ -189,8 +189,8 @@ class CRSATurn:
         self.lexicon = lexicon
         self.prior = prior
         self.past_utterances = past_utterances
-        self.dm_s = dm_s
-        self.dm_l = dm_l
+        self.ds = ds
+        self.dl = dl
         self.alpha = alpha
         self.max_depth = max_depth
         self.tolerance = tolerance
@@ -225,17 +225,17 @@ class CRSATurn:
         logger.info("-" * 40 + "\n" + "-" * 40 + "\n")
         
         logger.info(f"Past utterances: {self.past_utterances}\n")
-        logger.info(f"Prod Ps(u|w,x_s): {self.dm_s}\n")
-        logger.info(f"Prod Ps(u|w,x_l): {self.dm_l}\n")
+        logger.info(f"Prod Ps(u|w,x_s): {self.ds}\n")
+        logger.info(f"Prod Ps(u|w,x_l): {self.dl}\n")
     
         # Init agents
-        if self.dm_s is None and self.dm_l is None:
+        if self.ds is None and self.dl is None:
             dm_prod = None
         else:
-            dm_prod = np.outer(self.dm_s, self.dm_l)
+            dm_prod = np.outer(self.ds, self.dl)
             dm_prod[dm_prod <= ZERO] = ZERO
-        self.listener = Listener(self.categories, self.meanings_L, self.utterances, self.prior, self.dm_s)
-        self.speaker = Speaker(self.meanings_S, self.utterances, self.prior, self.dm_l, self.cost, self.alpha)
+        self.listener = Listener(self.categories, self.meanings_L, self.utterances, self.prior, self.ds)
+        self.speaker = Speaker(self.meanings_S, self.utterances, self.prior, self.dl, self.cost, self.alpha)
         self.listener.compute_literal_listener(self.lexicon)
         self.gain = CRSAGain(self.prior, dm_prod, self.cost, self.alpha)
         gain = self.gain.compute_gain(self.listener, self.speaker)
@@ -278,8 +278,8 @@ class CRSATurn:
             "prior": self.prior.tolist(),
             "lexicon": self.lexicon.tolist(),
             "past_utterances": self.past_utterances,
-            "dm_s": self.dm_s.tolist() if self.dm_s is not None else None,
-            "dm_l": self.dm_l.tolist() if self.dm_l is not None else None,
+            "ds": self.ds.tolist() if self.ds is not None else None,
+            "dl": self.dl.tolist() if self.dl is not None else None,
             "cost": self.cost.tolist(),
             "alpha": self.alpha,
             "max_depth": self.max_depth,
@@ -303,11 +303,11 @@ class CRSATurn:
         with open(output_dir / f"{prefix}history.pkl", "rb") as f:
             history = pickle.load(f)
         model = cls(**args)
-        model.listener = Listener(model.categories, model.meanings_L, model.utterances, model.prior, args["dm_s"])
+        model.listener = Listener(model.categories, model.meanings_L, model.utterances, model.prior, args["ds"])
         model.listener.history = history["listener"]
-        model.speaker = Speaker(model.meanings_S, model.utterances, model.prior, args["dm_l"], model.cost, model.alpha)
+        model.speaker = Speaker(model.meanings_S, model.utterances, model.prior, args["dl"], model.cost, model.alpha)
         model.speaker.history = history["speaker"]
-        dm_prod = None if args["dm_s"] is None or args["dm_l"] is None else np.outer(args["dm_s"], args["dm_l"])
+        dm_prod = None if args["ds"] is None or args["dl"] is None else np.outer(args["ds"], args["dl"])
         model.gain = CRSAGain(model.prior, dm_prod, model.cost, model.alpha)
         model.gain.cond_entropy_history = history["cond_entropy"]
         model.gain.listener_value_history = history["listener_value"]
