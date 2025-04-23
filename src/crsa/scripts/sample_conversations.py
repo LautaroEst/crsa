@@ -107,11 +107,13 @@ def main(
         conversation_logger.info(f"Sampled meanings: {meaning_A}, {meaning_B}. Sampled category: {y}.")
 
         past_utterances = []
+        speaker_now = "A"
         for turn in range(1,max_turns+1):
 
             conversation_logger.info(f"Turn {turn} of conversation {n + 1}.")
             
             model = CRSA(
+                speaker_now=speaker_now,
                 meanings_A=meanings_A,
                 meanings_B=meanings_B,
                 categories=categories,
@@ -140,10 +142,14 @@ def main(
             meaning_L = meaning_B if turn % 2 == 1 else meaning_A
             listener = last_model_turn.listener.as_df
             listener_dist = listener.loc[(new_utt,meaning_L),:].squeeze()
-            past_utterances.append(new_utt)
-
-            conversation_logger.info(f"Agent {'A' if turn % 2 == 1 else 'B'} speaks. Distribution: {utt_dist.to_dict()}. Sampled utterance: {new_utt}.")
-            conversation_logger.info(f"Agent {'B' if turn % 2 == 1 else 'A'} listens. Distribution: {listener_dist.to_dict()}.")
+            past_utterances.append({"speaker": speaker_now, "utterance": new_utt})
+            
+            # Log the conversation
+            conversation_logger.info(f"Agent {speaker_now} speaks. Distribution: {utt_dist.to_dict()}. Sampled utterance: {new_utt}.")
+            conversation_logger.info(f"Agent {'A' if speaker_now == 'B' else 'B'} listens. Distribution: {listener_dist.to_dict()}.")
+            
+            # Change speaker
+            speaker_now = "B" if speaker_now == "A" else "A"
 
             if listener_dist.max() > listener_threshold:
                 break

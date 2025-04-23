@@ -18,6 +18,24 @@
                 "--max_depths", "4",
                 "-v"
             ]
+        },
+        {
+            "name": "Debug: models",
+            "type": "debugpy",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "request": "launch",
+            "module": "crsa.scripts.compare_models",
+            "args": [
+                "--world", "findA1",
+                "--models", "crsa_sample", "crsa_max",
+                "--n_turns", "3",
+                "--alpha", "2.0",
+                "--max_depth", "4",
+                "--seed", "12345",
+                "--n_seeds", "2",
+                "--verbose",
+            ]
         }
     ]
 }
