@@ -1,12 +1,15 @@
 Part 1: CRSA on InfojigSaw
 
-- Finish gain computation and plot
+<!-- - Finish gain computation and plot -->
 - Implement baselines and debug
-- Reproduce statistics from PIP
+<!-- - Reproduce statistics from PIP -->
 - Implement the run_models_on_dataset script
 - Plot results for all models on InfojigSaw
 - Implement the PIP model and add to results
 - Write a the draft with mathematical formulation and first results
+
+
+
 
 Part 2: CRSA for controling conversations
 

@@ -15,7 +15,7 @@
                 "--world", "findA1_simple",
                 "--pasts", "1st 2nd",
                 "--alphas", "2.0",
-                "--max_depths", "4",
+                "--max_depths", "10",
                 "-v"
             ]
         },

@@ -7,14 +7,6 @@ conda activate crsa
 
 
 # python -m crsa.scripts.parameters \
-#     --world findA1_simple \
-#     --pasts \
-#         "1st 2nd" \
-#     --alphas 2.0 \
-#     --max_depths 4 \
-#     --verbose
-
-# python -m crsa.scripts.parameters \
 #     --world findA1 \
 #     --pasts \
 #         "1st" \
@@ -22,7 +14,7 @@ conda activate crsa
 #         "2nd 2nd" \
 #         "3rd 2nd" \
 #     --alphas 1.0 0.5 2.0 \
-#     --max_depths 20 20 20
+#     --tolerance 1e-3 1e-3 1e-3
 
 # python -m crsa.scripts.sample_conversations \
 #     --world findA1 \
@@ -30,17 +22,28 @@ conda activate crsa
 #     --listener_threshold 0.95 \
 #     --max_turns 5 \
 #     --alpha 2 \
-#     --max_depth 10 \
+#     --tolerance 1e-3 \
 #     --seed 1234
 
-python -m crsa.scripts.compare_models \
-    --world findA1 \
-    --models "crsa_sample" "crsa_max" \
-    --n_turns 5 \
-    --alpha 0.1 \
-    --max_depth 10 \
-    --seed 1234 \
-    --n_seeds 100
+for p in 4 5 6; do
+    for alpha in 1.2 1.5 2.0; do
+        python -m crsa.scripts.run_findA1 \
+            --n_possitions $p \
+            --models "literal_max" "multi_rsa_max" "crsa_max" \
+            --n_turns 9 \
+            --alpha $alpha \
+            --tolerance 1e-3 \
+            --seed 1234 \
+            --n_seeds 200
+    done
+done
+
+# python -m crsa.scripts.run_infojigsaw \
+#     --models "multi_rsa" "crsa" \
+#     --alpha 2.0 \
+#     --tolerance 1e-3 \
+#     --seed 1234
+
 
 # Finish
 conda deactivate

@@ -83,6 +83,8 @@ class LiteralTurn:
         utterances,
         prior,
         lexicon,
+        alpha=1.0,
+        cost=None,
     ):
         self.meanings_S = meanings_S
         self.meanings_L = meanings_L
@@ -90,6 +92,8 @@ class LiteralTurn:
         self.utterances = utterances
         self.lexicon = lexicon
         self.prior = prior
+        self.alpha = alpha
+        self.cost = cost if cost is not None else np.zeros(len(utterances), dtype=float)
 
         self.speaker = None
         self.listener = None
@@ -111,7 +115,7 @@ class LiteralTurn:
         logger.setLevel(logging.INFO)
 
         # Log configuration
-        logger.info(f"Running one turn of the Literal model for max depth {self.max_depth} and tolerance {self.tolerance:.2e}")
+        logger.info(f"Running one turn of the Literal model.")
         logger.info("-" * 40)
         logger.info(
             f"\nLexicon:\n\n{self.lexicon}\n\n"
@@ -120,16 +124,12 @@ class LiteralTurn:
         )
         logger.info("-" * 40 + "\n" + "-" * 40 + "\n")
         
-        logger.info(f"Past utterances: {self.past_utterances}\n")
-        logger.info(f"Prod Ps(u|w,x_s): {self.ds}\n")
-        logger.info(f"Prod Ps(u|w,x_l): {self.dl}\n")
-    
         # Init agents and compute literals
-        self.listener = Listener(self.categories, self.meanings_L, self.utterances, self.prior, self.ds)
+        self.listener = Listener(self.categories, self.meanings_L, self.utterances, self.prior)
         self.listener.compute_literal_listener(self.lexicon)
         logger.info(f"Literal listener:\n\n{self.listener.as_df}\n\n")
 
-        self.speaker = Speaker(self.meanings_S, self.utterances, self.prior, self.dl, self.cost, self.alpha)
+        self.speaker = Speaker(self.meanings_S, self.utterances, self.prior, self.cost, self.alpha)
         self.speaker.compute_literal_speaker(self.lexicon)
         logger.info(f"Literal speaker:\n\n{self.speaker.as_df}\n\n")
 
