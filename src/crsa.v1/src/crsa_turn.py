@@ -32,8 +32,8 @@ class Listener:
         else:
             # lexicon(u,a), prior(a,b,y), dm(a,b)
             literal_listener = np.einsum('a,aby,ua->uby', self.dm, self.prior, lexicon)
-            literal_listener[literal_listener <= ZERO] = ZERO
-
+        
+        literal_listener[literal_listener <= ZERO] = ZERO
         norm_term = literal_listener.sum(axis=-1, keepdims=True)
         norm_term[norm_term <= ZERO] = ZERO
         literal_listener = literal_listener / norm_term
@@ -118,6 +118,7 @@ class Speaker:
             log_pragmatic_speaker = self.alpha * np.einsum('ab,aby,uby->au', dm_frac, prior_y_given_ab, log_listener) - self.cost.reshape(1,-1)
         
         pragmatic_speaker = softmax(log_pragmatic_speaker, axis=1)
+        pragmatic_speaker[pragmatic_speaker <= ZERO] = ZERO
         self.history.append(pragmatic_speaker)
 
     @property

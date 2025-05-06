@@ -2,7 +2,7 @@
 
 
 import argparse
-from itertools import cycle
+from itertools import cycle, product
 import logging
 from pathlib import Path
 import shutil
@@ -16,7 +16,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 from ..src.crsa import CRSA
-from ..src.utils import read_config_file
+from ..src.multiturn_rsa import MultiTurnRSA
+from ..src.literal import Literal
 
 
 def sample_from_prior(prior, meanings_A, meanings_B, y):
@@ -30,8 +31,26 @@ def sample_from_prior(prior, meanings_A, meanings_B, y):
     return sampled_meaning_A, sampled_meaning_B, sampled_y
 
 def init_model(model_name, model_args):
-    if model_name in ["crsa_sample", "crsa_max"]:
+    if "crsa" in model_name:
         model = CRSA(**model_args)
+    elif "multi_rsa" in model_name:
+        model = MultiTurnRSA(**model_args)
+    elif "literal" in model_name:
+        model = Literal(
+            speaker_now=model_args["speaker_now"], 
+            meanings_A=model_args["meanings_A"], 
+            meanings_B=model_args["meanings_B"], 
+            categories=model_args["categories"], 
+            utterances_A=model_args["utterances_A"], 
+            utterances_B=model_args["utterances_B"], 
+            lexicon_A=model_args["lexicon_A"], 
+            lexicon_B=model_args["lexicon_B"], 
+            prior=model_args["prior"], 
+            past_utterances=model_args["past_utterances"], 
+            alpha=model_args["alpha"], 
+            cost_A=model_args["cost_A"], 
+            cost_B=model_args["cost_B"]
+        )
     else:
         raise ValueError(f"Model {model_name} not recognized.")
     return model
@@ -39,9 +58,9 @@ def init_model(model_name, model_args):
 def sample_new_utterance(model_name, meaning_S, last_turn_model):
     speaker = last_turn_model.speaker.as_df
     utt_dist = speaker.loc[meaning_S,:].squeeze()
-    if model_name == "crsa_sample":
+    if "sample" in model_name:
         new_utt = utt_dist.sample(n=1, weights=utt_dist.values).index[0]
-    elif model_name == "crsa_max":
+    elif "max" in model_name:
         new_utt = utt_dist.idxmax()
     return new_utt
 
@@ -102,15 +121,22 @@ def plot_results(df, models, alpha, max_depth, tolerance, output_dir):
     for i, metric in enumerate(metrics):
         # aggregate median, q1 and q3
         df_metric = df.groupby(["model","turn"]).agg(**{
-            "median": (metric, "median"),
-            "q1": (metric, lambda x: x.quantile(0.25)),
-            "q3": (metric, lambda x: x.quantile(0.75)),
+            # "median": (metric, "median"),
+            # "q1": (metric, lambda x: x.quantile(0.25)),
+            # "q3": (metric, lambda x: x.quantile(0.75)),
+            "mean": (metric, "mean"),
+            "std": (metric, "std"),
         }).reset_index()
         for c, model in enumerate(models):
             model_df = df_metric[df_metric["model"] == model].sort_values("turn")
-            ax[i].plot(model_df["turn"], model_df[f"median"], label=model, linestyle="--", linewidth=2, color=f"C{c}")
+            # ax[i].plot(model_df["turn"], model_df[f"median"], label=model, linestyle="--", linewidth=2, color=f"C{c}")
+            ax[i].plot(model_df["turn"], model_df["mean"], label=model, linestyle="--", linewidth=2, color=f"C{c}")
+            # ax[i].errorbar(
+            #     model_df["turn"], model_df["median"], yerr=[model_df["median"] - model_df["q1"], model_df["q3"] - model_df["median"]], 
+            #     fmt="o", capsize=5, capthick=2, elinewidth=2, markersize=5, color=f"C{c}",
+            # )
             ax[i].errorbar(
-                model_df["turn"], model_df["median"], yerr=[model_df["median"] - model_df["q1"], model_df["q3"] - model_df["median"]], 
+                model_df["turn"], model_df["mean"], yerr=model_df["std"], 
                 fmt="o", capsize=5, capthick=2, elinewidth=2, markersize=5, color=f"C{c}",
             )
             ax[i].set_ylabel(metric)
@@ -130,18 +156,55 @@ def compute_metric(category_dist, y, metric="accuracy"):
         return -np.log([dist[y] for dist in category_dist])
     raise ValueError(f"Metric {metric} not recognized.")
 
+def create_world(n_possitions):
+    world = {
+        "meanings_A": ["".join(l) for l in product("AB", repeat=n_possitions)],
+        "meanings_B": ["".join(n) for n in product("12", repeat=n_possitions)],
+        "categories": ["No (A,1) pair"] + [str(i+1) for i in range(n_possitions)],
+        "utterances_A": [str(i+1) for i in range(n_possitions)],
+        "utterances_B": [str(i+1) for i in range(n_possitions)],
+    }
+
+    prior = np.zeros((2**n_possitions,2**n_possitions,n_possitions+1))
+    for i in range(2**n_possitions):
+        for j in range(2**n_possitions):
+            # check if (meaninings_A[i][k] == "A" and meanings_B[j][k] == "1") happens only once for a fixed i,j for k in range(p)
+            count = 0
+            A1_idx = None
+            for k in range(n_possitions):
+                if world["meanings_A"][i][k] == "A" and world["meanings_B"][j][k] == "1":
+                    count += 1
+                    A1_idx = k
+            if count == 1:
+                prior[i,j,A1_idx+1] = 1
+            elif count == 0:
+                prior[i,j,0] = 1
+
+    lexicon_A = np.zeros((n_possitions,len(world["meanings_A"])))
+    for u, utt in enumerate(world["utterances_A"]):
+        for i, meaning in enumerate(world["meanings_A"]):
+            if meaning[int(u)] == "A":
+                lexicon_A[u,i] = 1
+    lexicon_A[:,-1] = 1
+
+    lexicon_B = np.zeros((n_possitions,len(world["meanings_B"])))
+    for u, utt in enumerate(world["utterances_B"]):
+        for i, meaning in enumerate(world["meanings_B"]):
+            if meaning[int(u)] == "1":
+                lexicon_B[u,i] = 1
+    lexicon_B[:,-1] = 1
+
+    world["prior"] = prior
+    world["lexicon_A"] = lexicon_A
+    world["lexicon_B"] = lexicon_B
+    world["cost_A"] = np.zeros(len(world["utterances_A"]))
+    world["cost_B"] = np.zeros(len(world["utterances_B"]))
+    
+    return world
+
 
 def main(
-    meanings_A: List[str],
-    meanings_B: List[str],
-    categories: List[str],
-    utterances_A: List[str],
-    utterances_B: List[str],
-    lexicon_A: List[List[int]],
-    lexicon_B: List[List[int]],
-    prior: List[List[List[float]]],
-    cost_A: List[float],
-    cost_B: List[float],
+    n_possitions: Optional[int] = 3,
     n_turns: Optional[int] = 10,
     models: Optional[List[str]] = ["crsa_sample"],
     alpha: Optional[float] = 1.0,
@@ -188,18 +251,12 @@ def main(
         script_logger.info(f"Running experiment for alpha={alpha}, max_depth={max_depth}, tolerance={tolerance} and seed={seed}.")
     suboutput_dir.mkdir(parents=True, exist_ok=True)
 
+    # create world
+    world = create_world(n_possitions)
+
     # Run models
     model_args = {
-        "meanings_A": meanings_A,
-        "meanings_B": meanings_B,
-        "categories": categories,
-        "utterances_A": utterances_A,
-        "utterances_B": utterances_B,
-        "lexicon_A": lexicon_A,
-        "lexicon_B": lexicon_B,
-        "prior": prior,
-        "cost_A": cost_A,
-        "cost_B": cost_B,
+        **world,
         "alpha": alpha,
         "max_depth": max_depth,
         "tolerance": tolerance,
@@ -207,7 +264,7 @@ def main(
     results = []
     for seed in trange(n_seeds):
 
-        meaning_A, meaning_B, y = sample_from_prior(prior, meanings_A, meanings_B, categories)
+        meaning_A, meaning_B, y = sample_from_prior(world["prior"], world["meanings_A"], world["meanings_B"], world["categories"])
 
         for model_name in models:
             predictions = run_model_for_n_turns(model_name, model_args, n_turns, meaning_A, meaning_B)
@@ -240,7 +297,7 @@ def setup():
 
     # Parse arguments
     parser = argparse.ArgumentParser(description="Run models for a given configuration file")
-    parser.add_argument("--world", type=str, help="Configuration file")
+    parser.add_argument("--n_possitions", type=int, help="Number of positions of the Find A1 Game", default=3)
     parser.add_argument("--models", type=str, nargs="+", help="Models to run", default=["crsa_sample"])
     parser.add_argument("--n_turns", type=int, help="Number of turns", default=5)
     parser.add_argument("--alpha", type=float, help="Alpha to run CRSA with", default=[1.0])
@@ -251,29 +308,30 @@ def setup():
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output", default=False)
     args = parser.parse_args()
 
-    # Read configuration file
-    config = read_config_file(f"worlds/{args.world}")
-
     # Create output directory
-    output_dir = Path("outputs") / Path(__file__).stem / args.world
+    output_dir = Path("outputs") / Path(__file__).stem / f"p={args.n_possitions}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Update configuration
-    config["models"] = args.models
-    config["n_turns"] = args.n_turns
-    config["alpha"] = args.alpha
-    config["max_depth"] = args.max_depth
-    config["tolerance"] = args.tolerance
-    config["seed"] = args.seed
-    config["n_seeds"] = args.n_seeds
-    config["output_dir"] = output_dir
-    config["verbose"] = args.verbose
-
-    # Save configuration file
-    shutil.copy(f"configs/worlds/{args.world}.yaml", output_dir / "config.yaml")
+    config = {
+        "n_possitions": args.n_possitions,
+        "models": args.models,
+        "n_turns": args.n_turns,
+        "alpha": args.alpha,
+        "max_depth": args.max_depth,
+        "tolerance": args.tolerance,
+        "seed": args.seed,
+        "n_seeds": args.n_seeds,
+        "output_dir": output_dir,
+        "verbose": args.verbose,
+    }
 
     return config
 
 if __name__ == '__main__':
     config = setup()
     main(**config)
+
+
+
+

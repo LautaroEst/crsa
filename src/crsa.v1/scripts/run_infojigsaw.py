@@ -46,7 +46,7 @@ def init_model(model_name, model_args):
         raise ValueError(f"Model {model_name} not recognized.")
     return model
 
-def run_model_for_n_turns(model_name, model_args, turns, meaning_A, meaning_B, starter_speaker, utterances):
+def run_model(model_name, model_args, meaning_A, meaning_B, starter_speaker, utterances):
     
     cycle_iterator = cycle("BA") if starter_speaker == "A" else cycle("AB")
 
@@ -57,6 +57,7 @@ def run_model_for_n_turns(model_name, model_args, turns, meaning_A, meaning_B, s
     model = init_model(model_name, model_args)
     model.run()
     last_speaker = model_args["speaker_now"]
+    turns = len(utterances)
     for turn, speaker_now, new_utt in zip(range(2, turns + 1),cycle_iterator, utterances):
 
         # update the model
@@ -64,29 +65,20 @@ def run_model_for_n_turns(model_name, model_args, turns, meaning_A, meaning_B, s
         model.continue_from_last_turn(new_past_utterances, speaker_now)
         last_speaker = speaker_now
 
-    # recreate the conversation
+    # Get last turn
     new_utt = utterances[-1]
-    conversation = model.past_utterances + [{"speaker": last_speaker, "utterance": new_utt}]
-    
-    # Collect predictions
-    predictions = {"turn": [], "speaker": [], "utterance": [], "category_dist": [], "utterance_dist": []}
-    for turn, (turn_model, turn_sample) in enumerate(zip(model.turns_history, conversation), 1):
-        
-        # Get listener's category distribution for each turn
-        listener = turn_model.listener.as_df
-        meaning_L = meaning_B if turn_sample["speaker"] == "A" else meaning_A
-        category_dist = listener.loc[(turn_sample["utterance"], meaning_L),:].squeeze()
+    turn_model = model.turns_history[-1]
 
-        # Get speaker's utterance distribution for each turn
-        meaning_S = meaning_A if turn_sample["speaker"] == "A" else meaning_B
-        utterance_dist = turn_model.speaker.as_df.loc[meaning_S,:].squeeze()
-        predictions["turn"].append(turn)
-        predictions["speaker"].append(turn_sample["speaker"])
-        predictions["utterance"].append(turn_sample["utterance"])
-        predictions["category_dist"].append(category_dist)
-        predictions["utterance_dist"].append(utterance_dist)
+    # Get listener's category distribution on the last turn
+    listener = turn_model.listener.as_df
+    meaning_L = meaning_B if last_speaker == "A" else meaning_A
+    category_dist = listener.loc[(new_utt, meaning_L),:].squeeze()
 
-    return predictions
+    # Get speaker's utterance distribution on the last turn
+    meaning_S = meaning_A if last_speaker == "A" else meaning_B
+    utterance_dist = turn_model.speaker.as_df.loc[meaning_S,:].squeeze()
+
+    return category_dist, utterance_dist
 
     
 def plot_results(df, models, alpha, max_depth, tolerance, output_dir):
@@ -96,15 +88,22 @@ def plot_results(df, models, alpha, max_depth, tolerance, output_dir):
     for i, metric in enumerate(metrics):
         # aggregate median, q1 and q3
         df_metric = df.groupby(["model","turn"]).agg(**{
-            "median": (metric, "median"),
-            "q1": (metric, lambda x: x.quantile(0.25)),
-            "q3": (metric, lambda x: x.quantile(0.75)),
+            # "median": (metric, "median"),
+            # "q1": (metric, lambda x: x.quantile(0.25)),
+            # "q3": (metric, lambda x: x.quantile(0.75)),
+            "mean": (metric, "mean"),
+            "std": (metric, "std"),
         }).reset_index()
         for c, model in enumerate(models):
             model_df = df_metric[df_metric["model"] == model].sort_values("turn")
-            ax[i].plot(model_df["turn"], model_df[f"median"], label=model, linestyle="--", linewidth=2, color=f"C{c}")
+            # ax[i].plot(model_df["turn"], model_df[f"median"], label=model, linestyle="--", linewidth=2, color=f"C{c}")
+            ax[i].plot(model_df["turn"], model_df["mean"], label=model, linestyle="--", linewidth=2, color=f"C{c}")
+            # ax[i].errorbar(
+            #     model_df["turn"], model_df["median"], yerr=[model_df["median"] - model_df["q1"], model_df["q3"] - model_df["median"]], 
+            #     fmt="o", capsize=5, capthick=2, elinewidth=2, markersize=5, color=f"C{c}",
+            # )
             ax[i].errorbar(
-                model_df["turn"], model_df["median"], yerr=[model_df["median"] - model_df["q1"], model_df["q3"] - model_df["median"]], 
+                model_df["turn"], model_df["mean"], yerr=model_df["std"], 
                 fmt="o", capsize=5, capthick=2, elinewidth=2, markersize=5, color=f"C{c}",
             )
             ax[i].set_ylabel(metric)
@@ -192,22 +191,18 @@ def main(
     results = []
     for idx, (meaning_letter, meaning_number, y, starter_speaker, utterances) in tqdm(dataset.samples(), total=len(dataset)):
         starter_speaker = "A" if starter_speaker == "playerChar" else "B"
-        n_turns = len(utterances)
         for model_name in models:
-            predictions = run_model_for_n_turns(model_name, model_args, n_turns, meaning_letter, meaning_number, starter_speaker, utterances)
-            accs = compute_metric(predictions["category_dist"], y, "accuracy")
-            nlls = compute_metric(predictions["category_dist"], y, "nll")
-            for turn, acc, nll in zip(predictions["turn"], accs, nlls):
-                results.append({
-                    "model": model_name,
-                    "sample_id": idx,
-                    "turn": turn,
-                    "accuracy": acc,
-                    "nll": nll,
-                })
-    df = pd.DataFrame(results)
+            category_dist, utterance_dist = run_model(model_name, model_args, meaning_letter, meaning_number, starter_speaker, utterances)
+            cat_acc = compute_metric([category_dist], y, "accuracy")[0]
+            cat_nll = compute_metric([category_dist], y, "nll")[0]
+            utt_acc = compute_metric([utterance_dist], utterances[-1], "accuracy")[0]
+            utt_nll = compute_metric([utterance_dist], utterances[-1], "nll")[0]
+            results.append({"model": model_name, "sample_idx": idx, "cat_accuracy": cat_acc, "cat_nll": cat_nll, "utt_accuracy": utt_acc, "utt_nll": utt_nll})
 
-    plot_results(df, models, alpha, max_depth, tolerance, suboutput_dir)
+    df = pd.DataFrame(results)
+    df.to_csv(output_dir / "results.csv", index=False)
+
+    # plot_results(df, models, alpha, max_depth, tolerance, suboutput_dir)
             
 
 

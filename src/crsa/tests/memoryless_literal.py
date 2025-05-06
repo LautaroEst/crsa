@@ -1,5 +1,5 @@
 
-from ..src.crsa import CRSA
+from ..src.memoryless_literal import MemorylessLiteral
 import numpy as np
 
 prior = np.array([
@@ -30,7 +30,7 @@ lexicon_B = np.array([
 
 
 def main():
-    model = CRSA(
+    model = MemorylessLiteral(
         meanings_A=["AAA", "AAB", "ABA", "ABB", "BAA", "BAB", "BBA", "BBB"],
         meanings_B=["111", "112", "121", "122", "211", "212", "221", "222"],
         categories=["None", "1st", "2nd", "3rd"],
@@ -40,9 +40,6 @@ def main():
         prior=prior,
         alpha=2.0,
         costs=costs,
-        pov="listener",
-        max_depth=np.inf,
-        tolerance=1e-3
     )
     conversation = [
         {"utterance": "1st", "speaker": "A"},

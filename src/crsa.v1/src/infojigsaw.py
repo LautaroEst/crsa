@@ -150,7 +150,7 @@ class InfoJigsawDataset:
         for i, (utt, _) in enumerate(self.utterance_counts):
             for j, m in enumerate(self.meanings_number):
                 props = self._meanings_number_id_2_props[m]
-                number_mask = np.array([int(c == props["find"][0]) for c in props["board_numbers"].split(",")])
+                number_mask = np.array([int(c == props["find"][1]) for c in props["board_numbers"].split(",")])
                 mask = self.board_compatible_with_utt(utt, props)
                 lexicon[i,j] = np.sum(number_mask * mask) > 0
         return lexicon
@@ -254,13 +254,24 @@ class InfoJigsawDataset:
     
     @property
     def world(self):
+        # lexicon_letter = self.lexicon_letter
+        # utterances_letter = [utt for i, (utt, _) in enumerate(self.utterance_counts) if lexicon_letter[i].sum() > 0]
+        # lexicon_letter = np.stack([lexicon_letter[i] for i, (utt, _) in enumerate(self.utterance_counts) if lexicon_letter[i].sum() > 0])
+        # lexicon_number = self.lexicon_number
+        # utterances_number = [utt for i, (utt, _) in enumerate(self.utterance_counts) if lexicon_number[i].sum() > 0]
+        # lexicon_number = np.stack([lexicon_number[i] for i, (utt, _) in enumerate(self.utterance_counts) if lexicon_number[i].sum() > 0])
+
         return {
             "meanings_letter": self.meanings_letter,
             "meanings_number": self.meanings_number,
             "categories": self.categories,
-            "utterances": [utt for utt, _ in self.utterance_counts],
-            "lexicon_letter": self.lexicon_letter,
+            # "utterances_letter": utterances_letter,
+            # "utterances_number": utterances_number,
+            # "lexicon_letter": lexicon_letter,
+            # "lexicon_number": lexicon_number,
+            "utterances": [utt for i, (utt, _) in enumerate(self.utterance_counts)],
             "lexicon_number": self.lexicon_number,
+            "lexicon_letter": self.lexicon_letter,
             "prior": self.prior,
         }
         

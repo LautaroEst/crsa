@@ -25,21 +25,22 @@ conda activate crsa
 #     --tolerance 1e-3 \
 #     --seed 1234
 
-for p in 4 5 6; do
-    for alpha in 1.2 1.5 2.0; do
+for p in 4 ; do
+    for alpha in 1.2 1.5 2.0 ; do
         python -m crsa.scripts.run_findA1 \
             --n_possitions $p \
-            --models "literal_max" "multi_rsa_max" "crsa_max" \
+            --models "crsa" "memoryless_rsa" "memoryless_literal" "prior_model" \
             --n_turns 9 \
             --alpha $alpha \
             --tolerance 1e-3 \
+            --metrics "accuracy" "nll" \
             --seed 1234 \
             --n_seeds 200
     done
 done
 
 # python -m crsa.scripts.run_infojigsaw \
-#     --models "multi_rsa" "crsa" \
+#     --models "crsa" "memoryless_rsa" "memoryless_literal" "prior_model"\
 #     --alpha 2.0 \
 #     --tolerance 1e-3 \
 #     --seed 1234

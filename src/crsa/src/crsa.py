@@ -1,112 +1,303 @@
 
-from itertools import cycle
-import logging
-from pathlib import Path
 import pandas as pd
-import yaml
 import numpy as np
+from scipy.special import softmax
 
-from .crsa_turn import CRSATurn
-from .utils import save_yaml
+from .utils import (
+    INF, ZERO,
+)
+
+
+class Listener:
+
+    def __init__(self, categories, meanings, utterances, prior, dm=None):
+        self.categories = categories
+        self.meanings = meanings
+        self.utterances = utterances
+        self.prior = prior
+        self.dm = dm
+        self.history = []
+
+    def compute_literal_listener(self, lexicon):
+
+        if self.dm is None:
+            # lexicon(u,a), prior(a,b,y)
+            literal_listener = np.einsum('ua,aby->uby', lexicon, self.prior)
+        else:
+            # lexicon(u,a), prior(a,b,y), dm(a,b)
+            literal_listener = np.einsum('a,aby,ua->uby', self.dm, self.prior, lexicon)
+        
+        literal_listener[literal_listener <= ZERO] = ZERO
+        norm_term = literal_listener.sum(axis=-1, keepdims=True)
+        norm_term[norm_term <= ZERO] = ZERO
+        literal_listener = literal_listener / norm_term
+        self.history.append(literal_listener)
+    
+    def update(self, speaker):
+        speaker_arr = speaker.as_array.copy()
+        speaker_arr[speaker_arr <= ZERO] = ZERO
+
+        if self.dm is None:
+            # lexicon(u,a), prior(a,b,y)
+            pragmatic_listener = np.einsum('au,aby->uby', speaker_arr, self.prior)
+        else:
+            # prior(a,b,y), dm(a,b), speaker(a,u)
+            pragmatic_listener = np.einsum('a,aby,au->uby', self.dm, self.prior, speaker_arr)
+
+        pragmatic_listener[pragmatic_listener <= ZERO] = ZERO
+        norm_term = pragmatic_listener.sum(axis=-1, keepdims=True)
+        norm_term[norm_term <= ZERO] = ZERO
+        pragmatic_listener = pragmatic_listener / norm_term
+        self.history.append(pragmatic_listener)
+
+    @property
+    def literal_listener_as_array(self):
+        return self.history[0]
+    
+    @property
+    def literal_listener_as_df(self):
+        return pd.DataFrame(self.history[0].reshape(-1,len(self.categories)), index=pd.MultiIndex.from_product([self.utterances, self.meanings], names=["utterance", "meaning"]), columns=self.categories)
+        
+    @property
+    def as_array(self):
+        return self.history[-1]
+    
+    @property
+    def as_df(self):
+        return pd.DataFrame(self.history[-1].reshape(-1,len(self.categories)), index=pd.MultiIndex.from_product([self.utterances, self.meanings], names=["utterance", "meaning"]), columns=self.categories)
+
+
+class Speaker:
+
+    def __init__(self, meanings, utterances, prior, dm=None, cost=None, alpha=1.0):
+        self.meanings = meanings
+        self.utterances = utterances
+        self.prior = prior
+        self.dm = dm
+        self.cost = cost if cost is not None else np.zeros(len(utterances), dtype=float)
+        self.alpha = alpha
+        self.history = []
+
+    def update(self, listener):
+
+        # Compute the conditional priors 
+        prior = self.prior.copy()
+        prior[prior <= ZERO] = ZERO
+        prior_ab = prior.sum(axis=2) # P(a,b)
+        prior_a = prior_ab.sum(axis=1, keepdims=True) # P(a)
+        prior_ab[prior_ab <= ZERO] = ZERO
+        prior_a[prior_a <= ZERO] = ZERO
+        prior_b_given_a = prior_ab / prior_a # P(b|a)
+        prior_by_given_a = prior / prior_a # P(b,y|a)
+        prior_y_given_ab = prior / prior_ab[:,:,np.newaxis] # P(y|a,b)
+
+        # Compute the log_listener
+        listener_arr = listener.as_array.copy()
+        mask = listener_arr > 0
+        log_listener = np.zeros_like(listener_arr, dtype=float)
+        log_listener[mask] = np.log(listener_arr[mask])
+        log_listener[~mask] = -INF
+
+        if self.dm is None:
+            # Compute the pragmatic speaker
+            log_pragmatic_speaker = self.alpha * np.einsum('aby,uby->au', prior_by_given_a, log_listener) - self.cost.reshape(1,-1)
+        else:
+            # Compute the quotient of dm
+            dm_num = np.einsum('b,ab->ab', self.dm, prior_b_given_a)
+            dm_num[dm_num <= ZERO] = ZERO
+            dm_frac = dm_num / dm_num.sum(axis=1, keepdims=True)
+            dm_frac[dm_frac <= ZERO] = ZERO
+
+            # Compute the pragmatic speaker
+            log_pragmatic_speaker = self.alpha * np.einsum('ab,aby,uby->au', dm_frac, prior_y_given_ab, log_listener) - self.cost.reshape(1,-1)
+        
+        pragmatic_speaker = softmax(log_pragmatic_speaker, axis=1)
+        pragmatic_speaker[pragmatic_speaker <= ZERO] = ZERO
+        self.history.append(pragmatic_speaker)
+
+    @property
+    def as_array(self):
+        if self.history:
+            return self.history[-1]
+    
+    @property
+    def as_df(self):
+        return pd.DataFrame(self.history[-1], index=pd.MultiIndex.from_product([self.meanings], names=["meaning"]), columns=self.utterances)
+
+
+class CRSAGain:
+
+    def __init__(self, prior, dm_s, dm_l, cost, alpha):
+        self.prior = prior
+        self.dm_s = dm_s if dm_s is not None else np.ones(prior.shape[0])
+        self.dm_l = dm_l if dm_l is not None else np.ones(prior.shape[1])
+        self.cost = cost
+        self.alpha = alpha
+        self.cond_entropy_history = []
+        self.listener_value_history = []
+        self.gain_history = []
+        
+    def _compute_cond_entropy(self, speaker):
+        dm_s = self.dm_s.copy()
+        dm_s[dm_s <= ZERO] = ZERO
+        prior = self.prior.copy().sum(axis=1).sum(axis=1)
+        prior[prior <= ZERO] = ZERO
+        speaker_arr = speaker.as_array.copy()
+        log_speaker_times_speaker = np.zeros_like(speaker_arr, dtype=float)
+        mask = speaker_arr > 0
+        log_speaker_times_speaker[mask] = speaker_arr[mask] * np.log(speaker_arr[mask])
+        log_speaker_times_speaker[~mask] = ZERO # approx 0 * log(0) = 0
+        return -np.einsum('a,a,au->', dm_s, prior, log_speaker_times_speaker)
+    
+    def _compute_listener_value(self, speaker, listener):
+        dm = np.outer(self.dm_s, self.dm_l)
+        dm[dm <= ZERO] = ZERO
+        prior = self.prior.copy()
+        prior[prior <= ZERO] = ZERO
+        speaker_arr = speaker.as_array.copy()
+        listener_arr = listener.as_array.copy()
+        log_listener = np.zeros_like(listener_arr, dtype=float)
+        mask = listener_arr > 0
+        log_listener[mask] = np.log(listener_arr[mask])
+        log_listener[~mask] = -INF
+        return np.einsum('ab,aby,au,uby->', dm, prior, speaker_arr, log_listener)
+
+    def compute_gain(self, listener, speaker):
+        if speaker.as_array is None:
+            return np.nan
+        cond_ent = self._compute_cond_entropy(speaker)
+        self.cond_entropy_history.append(cond_ent)
+        listener_value = self._compute_listener_value(speaker, listener)
+        self.listener_value_history.append(listener_value)
+        gain = cond_ent + self.alpha * listener_value
+        self.gain_history.append(gain)
+        return gain
+    
+    def get_diff(self):
+        if len(self.gain_history) < 2:
+            return float("inf")
+        return abs(self.gain_history[-1] - self.gain_history[-2]) / abs(self.gain_history[-2])
+
+
+
+class CRSATurn:
+    
+    def __init__(
+        self,
+        meanings_S,
+        meanings_L,
+        categories,
+        utterances,
+        prior,
+        lexicon,
+        past_utterances,
+        ds,
+        dl,
+        cost,
+        alpha,
+        max_depth,
+        tolerance,
+        pov="listener",
+    ):
+        self.meanings_S = meanings_S
+        self.meanings_L = meanings_L
+        self.categories = categories
+        self.utterances = utterances
+        self.cost = cost
+        self.lexicon = lexicon
+        self.prior = prior
+        self.past_utterances = past_utterances
+        self.ds = ds
+        self.dl = dl
+        self.alpha = alpha
+        self.max_depth = max_depth
+        self.tolerance = tolerance
+        self.pov = pov
+
+        self.speaker = None
+        self.listener = None
+        self.gain = None
+
+    def run(self):
+
+        # Init agents
+        self.listener = Listener(self.categories, self.meanings_L, self.utterances, self.prior, self.ds)
+        self.speaker = Speaker(self.meanings_S, self.utterances, self.prior, self.dl, self.cost, self.alpha)
+        self.listener.compute_literal_listener(self.lexicon)
+        self.gain = CRSAGain(self.prior, self.ds, self.dl, self.cost, self.alpha)
+
+        # Run the model for the given number of iterations
+        i = 0
+        while i < self.max_depth:
+            if self.pov == "listener":
+                # First update the speaker then the listener
+                self.speaker.update(self.listener)
+                self.listener.update(self.speaker)
+            elif self.pov == "speaker":
+                # First update the listener then the speaker
+                self.listener.update(self.speaker)
+                self.speaker.update(self.listener)
+            else:
+                raise ValueError("pov must be either 'listener' or 'speaker'")
+
+            # Check for convergence
+            gain = self.gain.compute_gain(self.listener, self.speaker)
+            if self.gain.get_diff() < self.tolerance:
+                break
+            i += 1
 
 
 
 class CRSA:
 
-    def __init__(self, speaker_now, meanings_A, meanings_B, categories, utterances_A, utterances_B, lexicon_A, lexicon_B, prior, past_utterances, cost_A=None, cost_B=None, alpha=1.0, max_depth=None, tolerance=1e-6):
+    def __init__(self, meanings_A, meanings_B, categories, utterances, lexicon_A, lexicon_B, prior, costs=None, alpha=1.0,  pov="listener", max_depth=None, tolerance=1e-6):
         
         # World parameters
-        self.speaker_now = speaker_now        
         self.meanings_A = meanings_A
         self.meanings_B = meanings_B
         self.categories = categories
-        self.utterances_A = utterances_A
-        self.utterances_B = utterances_B
+        self.utterances = utterances
         self.lexicon_A = np.asarray(lexicon_A, dtype=float)
         self.lexicon_B = np.asarray(lexicon_B, dtype=float)
         self.prior = np.asarray(prior, dtype=float)
         self.prior = self.prior / np.sum(self.prior)
-        self.past_utterances = past_utterances
 
         # Pragmatic parameters
-        self.cost_A = np.asarray(cost_A, dtype=float) if cost_A is not None else np.zeros(len(utterances_A))
-        self.cost_B = np.asarray(cost_B, dtype=float) if cost_B is not None else np.zeros(len(utterances_B))
+        self.costs = np.asarray(costs, dtype=float) if costs is not None else np.zeros(len(utterances))
         self.alpha = alpha
         
         # Iteration parameters
         self.max_depth = max_depth
         self.tolerance = tolerance
+        self.pov = pov
 
         # History
+        self.past_utterances = []
+        self.speaker_now = None
         self.turns_history = []
 
 
-    def run(self, output_dir=None, verbose=False):
-        
-        # Configure logging
-        logger = logging.getLogger(__name__)
-        formatter = logging.Formatter("%(message)s")
-        if verbose:
-            console_handler = logging.StreamHandler()
-            console_handler.setFormatter(formatter)
-            logger.addHandler(console_handler)
-        if output_dir is not None:
-            file_handler = logging.FileHandler(output_dir / "history.log", mode="w", encoding="utf-8")
-            file_handler.setFormatter(formatter)
-            logger.addHandler(file_handler)
-        logger.setLevel(logging.INFO)
+    def run(self, utterances, speaker_now="A"):
 
-        # Log configuration
-        logger.info(f"Running CRSA model for alpha={self.alpha}, max_depth={self.max_depth} and tolerance={self.tolerance}.")
-        logger.info(f"Past utterances: {self.past_utterances}")
-        logger.info("-" * 40 + "\n")
-        logger.info(
-            f"Meanings A: {self.meanings_A}\n"
-            f"Meanings B: {self.meanings_B}\n"
-            f"Categories: {self.categories}\n\n"
-            f"Prior:\n\n{pd.DataFrame(self.prior.reshape(-1,len(self.categories)), index=pd.MultiIndex.from_product([self.meanings_A, self.meanings_B], names=['meanings_A','meanings_B']), columns=self.categories)}\n\n"
-            f"Lexicon A:\n\n{pd.DataFrame(self.lexicon_A, index=self.utterances_A, columns=self.meanings_A)}\n\n"
-            f"Lexicon B:\n\n{pd.DataFrame(self.lexicon_B, index=self.utterances_B, columns=self.meanings_B)}\n\n"
-            f"Costs of utterances from agent A: \n\n{pd.Series(self.cost_A, index=self.utterances_A).to_string()}\n\n"
-            f"Costs of utterances from agent B: \n\n{pd.Series(self.cost_B, index=self.utterances_B).to_string()}\n\n"
-            f"Alpha: {self.alpha}\n"
-        )
-        logger.info("-" * 40 + "\n")
+        turns_runned = len(self.turns_history)
+        self.past_utterances.extend(utterances)
+        self.speaker_now = speaker_now
 
-        # Run CRSA turns
         turns = len(self.past_utterances) + 1
-        for current_turn in range(1, turns + 1):
+        for turn in range(turns_runned + 1, turns + 1):
 
-            if not self.past_utterances:
-                speaking_agent = self.speaker_now
-                past_utterances = []
-            else:
-                speaking_agent = self.past_utterances[current_turn-1]["speaker"] if current_turn <= len(self.past_utterances) else self.speaker_now
-                past_utterances = self.past_utterances[:current_turn-1]
-            listen_agent = "A" if speaking_agent == "B" else "B"
+            # Determine the speaker and listener
+            speaking_agent = self.past_utterances[turn-1]["speaker"] if turn <= len(self.past_utterances) else self.speaker_now
+            past_utterances = self.past_utterances[:turn-1]
 
-            # Log turn information
-            logger.info(f"Turn {current_turn}: Agent {speaking_agent} speaks and Agent {listen_agent} listens\n")
-            
-            # Run CRSA for the turn
-            model = self._run_turn(past_utterances, speaking_agent, output_dir, verbose=verbose, prefix=f"turn{current_turn:02d}_")
+            # Run for the turn
+            model = self._run_turn(past_utterances, speaking_agent)
             self.turns_history.append(model)
             
-        # Log final state
-        logger.info("Reached final turn")
-        logger.info("-" * 40)
-
-        # Close logging
-        for handler in logger.handlers:
-            handler.close()
-            logger.removeHandler(handler)
-
-    def _run_turn(self, past_utterances, speaker="A", output_dir=None, verbose=False, prefix=""):
+    def _run_turn(self, past_utterances, speaker="A"):
         meanings_S = self.meanings_A if speaker == "A" else self.meanings_B
         meanings_L = self.meanings_B if speaker == "A" else self.meanings_A
-        utterances = self.utterances_A if speaker == "A" else self.utterances_B
         lexicon = self.lexicon_A if speaker == "A" else self.lexicon_B
-        cost = self.cost_A if speaker == "A" else self.cost_B
         prior = self.prior.copy() if speaker == "A" else self.prior.copy().transpose(1, 0, 2)
         ds, dl = self._compute_dialog_model(past_utterances, speaker)
 
@@ -114,18 +305,19 @@ class CRSA:
             meanings_S=meanings_S,
             meanings_L=meanings_L,
             categories=self.categories,
-            utterances=utterances,
+            utterances=self.utterances,
             prior=prior,
             lexicon=lexicon,
             past_utterances=past_utterances,
             ds=ds,
             dl=dl,
-            cost=cost,
+            cost=self.costs,
             alpha=self.alpha,
             max_depth=self.max_depth,
-            tolerance=self.tolerance
+            tolerance=self.tolerance,
+            pov=self.pov,
         )
-        model.run(output_dir, verbose, prefix)
+        model.run()
         return model
     
     def _compute_dialog_model(self, past_utterances, speaker):
@@ -134,13 +326,10 @@ class CRSA:
         
         ds, dl = [], []
         for data, model in zip(past_utterances, self.turns_history):
+            utt_idx = self.utterances.index(data["utterance"])
             if data["speaker"] == speaker:
-                utterances_S = self.utterances_A if speaker == "A" else self.utterances_B
-                utt_idx = utterances_S.index(data["utterance"])
                 ds.append(model.speaker.as_array[:, utt_idx])
             else:
-                utterances_L = self.utterances_B if speaker == "A" else self.utterances_A
-                utt_idx = utterances_L.index(data["utterance"])
                 dl.append(model.speaker.as_array[:, utt_idx])
         
         ds_arr = np.ones(len(self.meanings_A if speaker == "A" else self.meanings_B))
@@ -152,82 +341,3 @@ class CRSA:
             dl_arr *= d
         
         return ds_arr, dl_arr
-    
-    def continue_from_last_turn(self, new_past_utterances, speaker_now, output_dir=None, verbose=False):
-
-        turns_runned = len(self.past_utterances) + 1
-        if len(self.turns_history) != turns_runned:
-            raise ValueError(f"CRSA model has not been run for {turns_runned} turns. Please run the model first.")
-        self.past_utterances.extend(new_past_utterances)
-        self.speaker_now = speaker_now
-
-        # Configure logging
-        logger = logging.getLogger(__name__)
-        formatter = logging.Formatter("%(message)s")
-        if verbose:
-            console_handler = logging.StreamHandler()
-            console_handler.setFormatter(formatter)
-            logger.addHandler(console_handler)
-        if output_dir is not None:
-            file_handler = logging.FileHandler(output_dir / "history.log", mode="a", encoding="utf-8")
-            file_handler.setFormatter(formatter)
-            logger.addHandler(file_handler)
-        logger.setLevel(logging.INFO)
-        
-        # Log configuration
-        logger.info(f"Continuing CRSA model for alpha={self.alpha}, max_depth={self.max_depth} and tolerance={self.tolerance}.")
-        logger.info(f"Past utterances: {self.past_utterances}")
-        logger.info("-" * 40 + "\n")
-
-        # Run CRSA turns
-        turns = len(self.past_utterances) + 1
-        for turn in range(turns_runned + 1, turns + 1):
-
-            # Determine the speaker and listener
-            speaking_agent = self.past_utterances[turn-1]["speaker"] if turn <= len(self.past_utterances) else self.speaker_now
-            past_utterances = self.past_utterances[:turn-1]
-            listen_agent = "A" if speaking_agent == "B" else "B"
-
-            # Log turn information
-            logger.info(f"Turn {turn}: Agent {speaking_agent} speaks and Agent {listen_agent} listens\n")
-            
-            # Run CRSA for the turn
-            model = self._run_turn(past_utterances, speaking_agent, output_dir, verbose=verbose, prefix=f"turn{turn:02d}_")
-            self.turns_history.append(model)
-
-
-            
-
-    def save(self, output_dir: Path, prefix: str = ""):
-        args = {
-            "speaker_now": self.speaker_now,
-            "meanings_A": self.meanings_A,
-            "meanings_B": self.meanings_B,
-            "categories": self.categories,
-            "utterances_A": self.utterances_A,
-            "utterances_B": self.utterances_B,
-            "lexicon_A": self.lexicon_A.tolist(),
-            "lexicon_B": self.lexicon_B.tolist(),
-            "prior": self.prior.tolist(),
-            "past_utterances": self.past_utterances,
-            "cost_A": self.cost_A.tolist(),
-            "cost_B": self.cost_B.tolist(),
-            "alpha": self.alpha,
-            "max_depth": self.max_depth,
-            "tolerance": self.tolerance,
-        }
-        save_yaml(args, output_dir / f"{prefix}args.yaml")
-
-        for turn, turn_data in enumerate(self.turns_history, start=1):
-            turn_data.save(output_dir, prefix=f"{prefix}turn{turn:02d}_")
-
-
-    @classmethod
-    def load(cls, output_dir: Path, prefix: str = ""):
-        with open(output_dir / f"{prefix}args.yaml", "r") as f:
-            args = yaml.safe_load(f)
-        model = cls(**args)
-        for turn in range(len(args["past_utterances"]) + 1):
-            model.turns_history.append(CRSATurn.load(output_dir, prefix=f"{prefix}turn{turn+1:02d}_"))
-
-        return model
