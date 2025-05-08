@@ -36,7 +36,7 @@ for p in 4 ; do
             --tolerance 1e-3 \
             --metrics "accuracy" "nll" \
             --seed 1234 \
-            --n_seeds 200
+            --n_seeds 10
     done
 done
 

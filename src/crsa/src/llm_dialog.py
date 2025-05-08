@@ -55,7 +55,7 @@ class LLM(LitGPTLLM):
             gather_probs = torch.gather(logprobs, -1, index).squeeze(2)
             end_logit = gather_probs.sum()
             endings_logits.append(end_logit)
-        endings_logits = torch.stack(endings_logits, dim=0).numpy()
+        endings_logits = torch.stack(endings_logits, dim=0).cpu().numpy()
         return endings_logits
 
 

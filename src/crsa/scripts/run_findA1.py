@@ -27,7 +27,7 @@ model2name = {
     "memoryless_rsa": "RSA on each turn (no history)",
     "memoryless_literal": "Literal model on each turn",
     "prior_model": "Random (prior)",
-    "llm_llama3": "Llama3",
+    "llm_meta-llama/Llama-3.2-1B-Instruct": "Llama3",
 }
 
 
@@ -227,11 +227,9 @@ def plot_results(df, models, alpha, max_depth, tolerance, metrics, output_dir):
             ax[i].set_xlabel("Turn")
             ax[i].grid(True)
             ax[i].set_xticks(model_df["turn"].astype(int))
-        df_metric.to_csv(output_dir / f"{metric}.csv", index=False)
     fig.suptitle(f"Model results over Turns for alpha={alpha}, max_depth={max_depth}, tolerance={tolerance}")
     ax[-1].legend(loc="lower center", bbox_to_anchor=(-0.1, -0.2), fontsize=12, ncol=4)
     plt.savefig(output_dir / f"scores.pdf", bbox_inches="tight", dpi=300)
-    df.to_csv(output_dir / "results.csv", index=False)
     plt.close(fig)
 
 
@@ -298,7 +296,7 @@ def main(
     }
     for model_name in models:
         if not model_name.startswith("llm_"):
-            model_dir = suboutput_dir / f"alpha={alpha}" / f"max_depth={max_depth}_tolerance={tolerance}"
+            model_dir = suboutput_dir / f"alpha={alpha}" / f"max_depth={max_depth}_tolerance={tolerance}" / model_name
         else:
             model_dir = suboutput_dir / model_name
         if model_dir.exists():
@@ -307,7 +305,7 @@ def main(
         all_model_results = []
         if model_name.startswith("llm_"):
             model_args["llm"] = LLM.load(model_name[4:])
-            model_args["llm"].distribute(devices="cpu", precision="bf16-true")
+            model_args["llm"].distribute(devices="auto", precision="bf16-true")
         script_logger.info(f"Running model {model_name} for {n_seeds} seeds.")
         for meaning_A, meaning_B, y in tqdm(scenarios):
             category_dist = run_model_for_n_turns(model_name, model_args, n_turns, meaning_A, meaning_B, n_possitions)
@@ -328,9 +326,9 @@ def main(
         model_df = pd.read_csv(model_dir / f"results.csv", index_col=None, header=0)
         results.append(model_df)
     results = pd.concat(results, ignore_index=True)
-    df.to_csv(suboutput_dir / "results.csv", index=False)
+    results.to_csv(suboutput_dir / "results.csv", index=False)
 
-    plot_results(df, models, alpha, max_depth, tolerance, metrics, suboutput_dir)
+    plot_results(results, models, alpha, max_depth, tolerance, metrics, suboutput_dir)
             
 
 
