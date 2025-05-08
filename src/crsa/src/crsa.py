@@ -190,7 +190,6 @@ class CRSATurn:
         utterances,
         prior,
         lexicon,
-        past_utterances,
         ds,
         dl,
         cost,
@@ -206,7 +205,6 @@ class CRSATurn:
         self.cost = cost
         self.lexicon = lexicon
         self.prior = prior
-        self.past_utterances = past_utterances
         self.ds = ds
         self.dl = dl
         self.alpha = alpha
@@ -276,6 +274,13 @@ class CRSA:
         self.speaker_now = None
         self.turns_history = []
 
+    def sample_new_utterance_from_last_speaker(self, meaning_S):
+        speaker = self.turns_history[-1].speaker.as_df
+        utt_dist = speaker.loc[meaning_S,:].squeeze()
+        return utt_dist[utt_dist == utt_dist.max()].sample(n=1).index[0]
+
+    def get_category_dist_from_last_listener(self, new_utt, meaning_L):
+        return self.turns_history[-1].listener.as_df.loc[(new_utt, meaning_L),:].values.reshape(-1)
 
     def run(self, utterances, speaker_now="A"):
 
@@ -308,7 +313,6 @@ class CRSA:
             utterances=self.utterances,
             prior=prior,
             lexicon=lexicon,
-            past_utterances=past_utterances,
             ds=ds,
             dl=dl,
             cost=self.costs,

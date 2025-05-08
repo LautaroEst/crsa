@@ -8,13 +8,14 @@ from typing import List, Optional
 
 import numpy as np
 import pandas as pd
-from tqdm import trange
+from tqdm import tqdm
 import matplotlib.pyplot as plt
 
 from ..src.crsa import CRSA
 from ..src.prior_model import PriorModel
 from ..src.memoryless_literal import MemorylessLiteral
 from ..src.memoryless_rsa import MemorylessRSA
+from ..src.llm_dialog import LLMDialog, LLM
 
 metric2name = {
     "accuracy": "Average of correct guessings",
@@ -25,7 +26,8 @@ model2name = {
     "crsa": "CRSA",
     "memoryless_rsa": "RSA on each turn (no history)",
     "memoryless_literal": "Literal model on each turn",
-    "prior_model": "Random (prior)"
+    "prior_model": "Random (prior)",
+    "llm_llama3": "Llama3",
 }
 
 
@@ -39,7 +41,7 @@ def sample_from_prior(prior, meanings_A, meanings_B, y):
     sampled_y = y[sampled_indices[2]]
     return sampled_meaning_A, sampled_meaning_B, sampled_y
 
-def init_model(model_name, model_args):
+def init_model(model_name, model_args, meaning_A, meaning_B, n_possitions):
     if model_name == "crsa":
         model = CRSA(
             meanings_A=model_args["meanings_A"],
@@ -91,21 +93,38 @@ def init_model(model_name, model_args):
             costs=model_args["costs"],
             prior=model_args["prior"]
         )
+    elif model_name.startswith("llm_"):
+        model = LLMDialog(
+            system_prompt_A=f"You are playing a game with the user. You are given {n_possitions} cards, "
+            "each of which contains a letter (A, B, C, ...) and a number (1, 2, 3, ...). The goal "
+            "is to find the possition of the card that contains the value A1. "
+            "You only can see the letter of the card, not the number. The user can see the number, but not "
+            "the letter. You have to communicate with the user to find out where is the card that contains the value A1. "
+            "In each turn, you only can provide the user, one of the possible possitions that could potentially contatin "
+            "the target card (i.e., 1st possition, 2nd possition, ...). Try to do it in the less possible turns."
+            f"You are given {n_possitions} cards containing the values {meaning_A}.",
+            system_prompt_B=f"You are playing a game with the user. You are given {n_possitions} cards, "
+            "each of which contains a letter (A, B, C, ...) and a number (1, 2, 3, ...). The goal "
+            "is to find the possition of the card that contains the value A1. "
+            "You only can see the number of the card, not the letter. The user can see the letter, but not "
+            "the number. You have to communicate with the user to find out where is the card that contains the value A1. "
+            "In each turn, you only can provide the user, one of the possible possitions that could potentially contatin "
+            "the target card (i.e., 1st possition, 2nd possition, ...). Try to do it in the less possible turns."
+            f"You are given {n_possitions} cards containing the values {meaning_B}.",
+            utterances=model_args["utterances"],
+            categories=model_args["categories"],
+            llm=model_args["llm"],
+            game="findA1",
+        )
     else:
         raise ValueError(f"Model {model_name} not recognized.")
     return model
 
 
-def get_new_utterance(meaning_S, last_turn_model):
-    speaker = last_turn_model.speaker.as_df
-    utt_dist = speaker.loc[meaning_S,:].squeeze()
-    return utt_dist[utt_dist == utt_dist.max()].sample(n=1).index[0]
-
-
-def run_model_for_n_turns(model_name, model_args, turns, meaning_A, meaning_B):
+def run_model_for_n_turns(model_name, model_args, turns, meaning_A, meaning_B, n_possitions):
     
     # Init the model
-    model = init_model(model_name, model_args)
+    model = init_model(model_name, model_args, meaning_A, meaning_B, n_possitions)
 
     # Run for each turn
     new_past_utterances = []
@@ -114,17 +133,16 @@ def run_model_for_n_turns(model_name, model_args, turns, meaning_A, meaning_B):
 
         # update the model
         model.run(new_past_utterances, speaker_now)
-        turn_model = model.turns_history[-1]
 
         # sample a new utterance
         meaning_S = meaning_A if speaker_now == "A" else meaning_B
-        new_utt = get_new_utterance(meaning_S, turn_model)
+        new_utt = model.sample_new_utterance_from_last_speaker(meaning_S)
         new_past_utterances = [{"speaker": speaker_now, "utterance": new_utt}]
 
         # Get listener's category distribution for current turn
-        listener = turn_model.listener.as_df
         meaning_L = meaning_B if speaker_now == "A" else meaning_A
-        category_dist.append(listener.loc[(new_utt, meaning_L),:].values.reshape(-1))
+        listener_dist = model.get_category_dist_from_last_listener(new_utt, meaning_L)
+        category_dist.append(listener_dist)
 
     category_dist = np.vstack(category_dist)
     return category_dist
@@ -259,18 +277,17 @@ def main(
         tolerance = 0.
 
     # Create output directory
-    suboutput_dir = output_dir / f"alpha={alpha}" / f"max_depth={max_depth}_tolerance={tolerance}" / f"seed={seed}"
-    if suboutput_dir.exists():
-        script_logger.warning(f"Experiment already run for alpha={alpha}, max_depth={max_depth}, tolerance={tolerance} and seed={seed}. Skipping.")
-        df = pd.read_csv(suboutput_dir / "results.csv", index_col=None, header=0)
-        plot_results(df, models, alpha, max_depth, tolerance, metrics, suboutput_dir)
-        return
-    else:
-        script_logger.info(f"Running experiment for alpha={alpha}, max_depth={max_depth}, tolerance={tolerance} and seed={seed}.")
+    suboutput_dir = output_dir / f"seed={seed}"
     suboutput_dir.mkdir(parents=True, exist_ok=True)
 
     # create world
     world = create_world(n_possitions)
+
+    # Create scenarios
+    scenarios = [
+        sample_from_prior(world["prior"], world["meanings_A"], world["meanings_B"], world["categories"])
+        for _ in range(n_seeds)
+    ]
 
     # Run models
     model_args = {
@@ -279,21 +296,38 @@ def main(
         "max_depth": max_depth,
         "tolerance": tolerance,
     }
-    results = []
-    for seed in trange(n_seeds):
-        meaning_A, meaning_B, y = sample_from_prior(world["prior"], world["meanings_A"], world["meanings_B"], world["categories"])
-        for model_name in models:
-            category_dist = run_model_for_n_turns(model_name, model_args, n_turns, meaning_A, meaning_B)
+    for model_name in models:
+        if not model_name.startswith("llm_"):
+            model_dir = suboutput_dir / f"alpha={alpha}" / f"max_depth={max_depth}_tolerance={tolerance}"
+        else:
+            model_dir = suboutput_dir / model_name
+        if model_dir.exists():
+            continue
+        model_dir.mkdir(parents=True, exist_ok=True)
+        all_model_results = []
+        if model_name.startswith("llm_"):
+            model_args["llm"] = LLM.load(model_name[4:])
+            model_args["llm"].distribute(devices="cpu", precision="bf16-true")
+        script_logger.info(f"Running model {model_name} for {n_seeds} seeds.")
+        for meaning_A, meaning_B, y in tqdm(scenarios):
+            category_dist = run_model_for_n_turns(model_name, model_args, n_turns, meaning_A, meaning_B, n_possitions)
             model_results = compute_metrics(category_dist, y, world["categories"], metrics)
             for metric in metrics:
                 for turn in range(1, n_turns + 1):
-                    results.append({
+                    all_model_results.append({
                         "seed": seed,
                         "model": model_name,
                         "turn": turn,
                         metric: model_results[metric][turn-1]
                     })
-    df = pd.DataFrame(results)
+        df = pd.DataFrame(all_model_results)
+        df.to_csv(model_dir / f"results.csv", index=False)
+
+    results = []
+    for model_name in models:
+        model_df = pd.read_csv(model_dir / f"results.csv", index_col=None, header=0)
+        results.append(model_df)
+    results = pd.concat(results, ignore_index=True)
     df.to_csv(suboutput_dir / "results.csv", index=False)
 
     plot_results(df, models, alpha, max_depth, tolerance, metrics, suboutput_dir)

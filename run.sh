@@ -6,6 +6,7 @@ source ~/anaconda3/etc/profile.d/conda.sh
 conda activate crsa
 
 
+
 # python -m crsa.scripts.parameters \
 #     --world findA1 \
 #     --pasts \
@@ -29,7 +30,7 @@ for p in 4 ; do
     for alpha in 1.2 1.5 2.0 ; do
         python -m crsa.scripts.run_findA1 \
             --n_possitions $p \
-            --models "crsa" "memoryless_rsa" "memoryless_literal" "prior_model" \
+            --models "crsa" "memoryless_rsa" "memoryless_literal" "prior_model" "llm_meta-llama/Llama-3.2-1B-Instruct" \
             --n_turns 9 \
             --alpha $alpha \
             --tolerance 1e-3 \
