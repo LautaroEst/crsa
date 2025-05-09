@@ -1,6 +1,6 @@
 #!/bin/bash -e
 #SBATCH -J rsa
-#SBATCH -t 4:00:00
+#SBATCH -t 6:00:00
 #SBATCH --gres=gpu:1
 
 
@@ -40,10 +40,11 @@ for p in 4 ; do
             --models "crsa" "memoryless_rsa" "memoryless_literal" "prior_model" "llmrsa_$llm" "llm_$llm" \
             --n_turns 9 \
             --alpha $alpha \
+	    --max_depth 1000 \
             --tolerance 1e-3 \
             --metrics "accuracy" "nll" \
             --seed 1234 \
-            --n_seeds 100
+            --n_seeds 2
     done
 done
 

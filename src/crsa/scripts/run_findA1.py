@@ -356,7 +356,7 @@ def main(
             llm_not_loaded = False
         elif model_name.startswith("llmrsa_") and llm_not_loaded:
             model_args["llm"] = LLM.load(model_name[7:])
-            model_args["llm"].distribute(devices="auto", precision="bf16-true")
+            model_args["llm"].distribute(accelerator="cuda", precision="bf16-true")
             llm_not_loaded = False
         script_logger.info(f"Running model {model_name} for {n_seeds} seeds.")
         for meaning_A, meaning_B, y in tqdm(scenarios):
