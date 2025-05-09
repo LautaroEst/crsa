@@ -10,19 +10,22 @@ class Listener:
         self.system_prompt = system_prompt
         self.past_utterances = past_utterances
         self.llm = llm
+        self.has_not_run_yet = True
 
-    def run(self):
-        prompt = self.create_prompt()
+    def run(self, new_utt):
+        prompt = self.create_prompt(new_utt)
         endings = self.create_endings()
         self._logits = self.llm.predict(prompt=prompt, endings=endings)
+        self.has_not_run_yet = False
 
-    def create_prompt(self):
+    def create_prompt(self, new_utt):
         prompt = self.llm.prompt_style.apply([{"role": "system", "content": self.system_prompt}])
         for turn in self.past_utterances:
-            if turn["speaker"] == "L":
+            if turn["speaker"] == "S":
                 prompt += self.llm.prompt_style.apply([{"role": "assistant", "content": turn["utterance"]}])
-            elif turn["speaker"] == "S":
+            elif turn["speaker"] == "L":
                 prompt += self.llm.prompt_style.apply([{"role": "user", "content": turn["utterance"]}])
+        prompt += self.llm.prompt_style.apply([{"role": "user", "content": new_utt}])
         return prompt
     
     def create_endings(self):
@@ -44,13 +47,14 @@ class Speaker:
         self.utterances = utterances
         self.past_utterances = past_utterances
         self.llm = llm
+        self.has_not_run_yet = True
 
     def create_prompt(self):
         prompt = self.llm.prompt_style.apply([{"role": "system", "content": self.system_prompt}])
         for turn in self.past_utterances:
-            if turn["speaker"] == "L":
+            if turn["speaker"] == "S":
                 prompt += self.llm.prompt_style.apply([{"role": "user", "content": turn["utterance"]}])
-            elif turn["speaker"] == "S":
+            elif turn["speaker"] == "L":
                 prompt += self.llm.prompt_style.apply([{"role": "assistant", "content": turn["utterance"]}])
         return prompt
     
@@ -64,6 +68,7 @@ class Speaker:
         prompt = self.create_prompt()
         endings = self.create_endings()
         self._logits = self.llm.predict(prompt=prompt, endings=endings)
+        self.has_not_run_yet = False
 
     @property
     def as_df(self):

@@ -16,19 +16,29 @@ from ..src.prior_model import PriorModel
 from ..src.memoryless_literal import MemorylessLiteral
 from ..src.memoryless_rsa import MemorylessRSA
 from ..src.llm_dialog import LLMDialog, LLM
+from ..src.llm_rsa import LLMRSA
 
 metric2name = {
     "accuracy": "Average of correct guessings",
     "nll": "Listener Cross-entropy"
 }
 
-model2name = {
-    "crsa": "CRSA",
-    "memoryless_rsa": "RSA on each turn (no history)",
-    "memoryless_literal": "Literal model on each turn",
-    "prior_model": "Random (prior)",
-    "llm_meta-llama/Llama-3.2-1B-Instruct": "Llama3",
-}
+
+def model2name(model_name):
+    if model_name == "crsa":
+        return "CRSA",
+    elif model_name == "memoryless_rsa":
+        return "RSA on each turn (no history)"
+    elif model_name == "memoryless_literal":
+        return "Literal model on each turn"
+    elif model_name == "prior_model":
+        return "Random (prior)"
+    elif model_name.startswith("llm_"):
+        return f"LLM {model_name[4:]}"
+    elif model_name.startswith("llmrsa_"):
+        return f"LLM-RSA {model_name[7:]}"
+    else:
+        raise ValueError(f"Model {model_name} not recognized.")
 
 
 def sample_from_prior(prior, meanings_A, meanings_B, y):
@@ -101,7 +111,7 @@ def init_model(model_name, model_args, meaning_A, meaning_B, n_possitions):
             "You only can see the letter of the card, not the number. The user can see the number, but not "
             "the letter. You have to communicate with the user to find out where is the card that contains the value A1. "
             "In each turn, you only can provide the user, one of the possible possitions that could potentially contatin "
-            "the target card (i.e., 1st possition, 2nd possition, ...). Try to do it in the less possible turns."
+            "the target card (i.e., 1st possition, 2nd possition, ...). Try to do it in the less possible turns. "
             f"You are given {n_possitions} cards containing the values {meaning_A}.",
             system_prompt_B=f"You are playing a game with the user. You are given {n_possitions} cards, "
             "each of which contains a letter (A, B, C, ...) and a number (1, 2, 3, ...). The goal "
@@ -109,12 +119,44 @@ def init_model(model_name, model_args, meaning_A, meaning_B, n_possitions):
             "You only can see the number of the card, not the letter. The user can see the letter, but not "
             "the number. You have to communicate with the user to find out where is the card that contains the value A1. "
             "In each turn, you only can provide the user, one of the possible possitions that could potentially contatin "
-            "the target card (i.e., 1st possition, 2nd possition, ...). Try to do it in the less possible turns."
+            "the target card (i.e., 1st possition, 2nd possition, ...). Try to do it in the less possible turns. "
             f"You are given {n_possitions} cards containing the values {meaning_B}.",
             utterances=model_args["utterances"],
             categories=model_args["categories"],
             llm=model_args["llm"],
             game="findA1",
+        )
+    elif model_name.startswith("llmrsa_"):
+        model = LLMRSA(
+            meanings_A=model_args["meanings_A"],
+            meanings_B=model_args["meanings_B"],
+            system_prompt_template_A=f"You are playing a game with the user. You are given {n_possitions} cards, "
+            "each of which contains a letter (A, B, C, ...) and a number (1, 2, 3, ...). The goal "
+            "is to find the possition of the card that contains the value A1. "
+            "You only can see the letter of the card, not the number. The user can see the number, but not "
+            "the letter. You have to communicate with the user to find out where is the card that contains the value A1. "
+            "In each turn, you only can provide the user, one of the possible possitions that could potentially contatin "
+            "the target card (i.e., 1st possition, 2nd possition, ...). Try to do it in the less possible turns. "
+            f"You are given {n_possitions} cards "
+            "containing the values {meaning}.",
+            system_prompt_template_B=f"You are playing a game with the user. You are given {n_possitions} cards, "
+            "each of which contains a letter (A, B, C, ...) and a number (1, 2, 3, ...). The goal "
+            "is to find the possition of the card that contains the value A1. "
+            "You only can see the number of the card, not the letter. The user can see the letter, but not "
+            "the number. You have to communicate with the user to find out where is the card that contains the value A1. "
+            "In each turn, you only can provide the user, one of the possible possitions that could potentially contatin "
+            "the target card (i.e., 1st possition, 2nd possition, ...). Try to do it in the less possible turns. "
+            f"You are given {n_possitions} cards "
+            "containing the values {meaning}.",
+            categories=model_args["categories"],
+            utterances=model_args["utterances"],
+            prior=model_args["prior"],
+            llm=model_args["llm"],
+            alpha=model_args["alpha"],
+            costs=model_args["costs"],
+            pov="listener",
+            max_depth=model_args["max_depth"],
+            tolerance=model_args["tolerance"],
         )
     else:
         raise ValueError(f"Model {model_name} not recognized.")
@@ -151,8 +193,8 @@ def create_world(n_possitions):
     world = {
         "meanings_A": ["".join(l) for l in product("AB", repeat=n_possitions)],
         "meanings_B": ["".join(n) for n in product("12", repeat=n_possitions)],
-        "categories": ["No (A,1) pair"] + [str(i+1) for i in range(n_possitions)],
-        "utterances": [str(i+1) for i in range(n_possitions)],
+        "categories": ["There is no A1 card"] + [f"The card A1 is at possition {i+1}" for i in range(n_possitions)],
+        "utterances": [f"The card A1 is at possition {i+1}" for i in range(n_possitions)],
     }
 
     prior = np.zeros((2**n_possitions,2**n_possitions,n_possitions+1))
@@ -218,7 +260,7 @@ def plot_results(df, models, alpha, max_depth, tolerance, metrics, output_dir):
         df_metric = df.groupby(["model","turn"]).mean().reset_index()
         for c, model in enumerate(models):
             model_df = df_metric[df_metric["model"] == model].sort_values("turn")
-            ax[i].plot(model_df["turn"], model_df[metric], label=model2name[model], linestyle="--", linewidth=2, color=f"C{c}")
+            ax[i].plot(model_df["turn"], model_df[metric], label=model2name(model), linestyle="--", linewidth=2, color=f"C{c}")
             # ax[i].errorbar(
             #     model_df["turn"], model_df["mean"], yerr=model_df["std"], 
             #     fmt="o", capsize=5, capthick=2, elinewidth=2, markersize=5, color=f"C{c}",
@@ -229,7 +271,7 @@ def plot_results(df, models, alpha, max_depth, tolerance, metrics, output_dir):
             ax[i].set_xticks(model_df["turn"].astype(int))
     fig.suptitle(f"Model results over Turns for alpha={alpha}, max_depth={max_depth}, tolerance={tolerance}")
     ax[-1].legend(loc="lower center", bbox_to_anchor=(-0.1, -0.2), fontsize=12, ncol=4)
-    plt.savefig(output_dir / f"scores.pdf", bbox_inches="tight", dpi=300)
+    plt.savefig(output_dir / f"scores_alpha={alpha}.pdf", bbox_inches="tight", dpi=300)
     plt.close(fig)
 
 
@@ -275,7 +317,7 @@ def main(
         tolerance = 0.
 
     # Create output directory
-    suboutput_dir = output_dir / f"seed={seed}"
+    suboutput_dir = output_dir
     suboutput_dir.mkdir(parents=True, exist_ok=True)
 
     # create world
@@ -294,18 +336,28 @@ def main(
         "max_depth": max_depth,
         "tolerance": tolerance,
     }
+    llm_not_loaded = True
+    model_dirs = []
     for model_name in models:
-        if not model_name.startswith("llm_"):
-            model_dir = suboutput_dir / f"alpha={alpha}" / f"max_depth={max_depth}_tolerance={tolerance}" / model_name
+        if model_name.startswith("llmrsa_"):    
+            model_dir = suboutput_dir / f"alpha={alpha}" / model_name.replace("/", "--")
+        elif model_name.startswith("llm_"):
+            model_dir = suboutput_dir / model_name.replace("/", "--")
         else:
-            model_dir = suboutput_dir / model_name
+            model_dir = suboutput_dir / f"alpha={alpha}" / model_name
+        model_dirs.append(model_dir)
         if model_dir.exists():
             continue
         model_dir.mkdir(parents=True, exist_ok=True)
         all_model_results = []
-        if model_name.startswith("llm_"):
+        if model_name.startswith("llm_") and llm_not_loaded:
             model_args["llm"] = LLM.load(model_name[4:])
             model_args["llm"].distribute(devices="auto", precision="bf16-true")
+            llm_not_loaded = False
+        elif model_name.startswith("llmrsa_") and llm_not_loaded:
+            model_args["llm"] = LLM.load(model_name[7:])
+            model_args["llm"].distribute(devices="auto", precision="bf16-true")
+            llm_not_loaded = False
         script_logger.info(f"Running model {model_name} for {n_seeds} seeds.")
         for meaning_A, meaning_B, y in tqdm(scenarios):
             category_dist = run_model_for_n_turns(model_name, model_args, n_turns, meaning_A, meaning_B, n_possitions)
@@ -322,11 +374,11 @@ def main(
         df.to_csv(model_dir / f"results.csv", index=False)
 
     results = []
-    for model_name in models:
+    for model_dir in model_dirs:
         model_df = pd.read_csv(model_dir / f"results.csv", index_col=None, header=0)
         results.append(model_df)
-    results = pd.concat(results, ignore_index=True)
-    results.to_csv(suboutput_dir / "results.csv", index=False)
+    results = pd.concat(results, ignore_index=True, axis=0)
+    results.to_csv(suboutput_dir / f"results_alpha={alpha}.csv", index=False)
 
     plot_results(results, models, alpha, max_depth, tolerance, metrics, suboutput_dir)
             

@@ -166,13 +166,12 @@ class RSAGain:
 
 class MemorylessRSATurn:
 
-    def __init__(self, meanings_S, meanings_L, categories, utterances, lexicon_S, lexicon_L, prior, alpha=1.0, costs=None, pov="listener", max_depth=100, tolerance=1e-5):
+    def __init__(self, meanings_S, meanings_L, categories, utterances, lexicon, prior, alpha=1.0, costs=None, pov="listener", max_depth=100, tolerance=1e-5):
         self.meanings_S = meanings_S
         self.meanings_L = meanings_L
         self.categories = categories
         self.utterances = utterances
-        self.lexicon_S = lexicon_S
-        self.lexicon_L = lexicon_L
+        self.lexicon = lexicon
         self.prior = prior
         self.alpha = alpha
         self.costs = costs if costs is not None else np.zeros(len(utterances))
@@ -180,10 +179,16 @@ class MemorylessRSATurn:
         self.max_depth = max_depth
         self.tolerance = tolerance
 
-        self.speaker = Speaker(meanings_S, utterances, prior, lexicon_L, alpha, costs)
-        self.speaker.compute_literal()
-        self.listener = Listener(meanings_L, utterances, categories, prior, lexicon_S)
-        self.listener.compute_literal()
+        if pov == "listener":
+            self.speaker = Speaker(meanings_S, utterances, prior, None, alpha, costs)
+            self.listener = Listener(meanings_L, utterances, categories, prior, lexicon)
+            self.listener.compute_literal()
+        elif pov == "speaker":
+            self.speaker = Speaker(meanings_S, utterances, prior, lexicon, alpha, costs)
+            self.speaker.compute_literal()
+            self.listener = Listener(meanings_L, utterances, categories, prior, None)
+        else:
+            raise ValueError("pov must be either 'listener' or 'speaker'")
         self.gain = RSAGain(prior, costs, alpha)
 
     def run(self):
@@ -257,16 +262,19 @@ class MemorylessRSA:
         prior = self.prior.copy() if speaker_now == "A" else self.prior.copy().transpose(1, 0, 2)
         meanings_S = self.meanings_A if speaker_now == "A" else self.meanings_B
         meanings_L = self.meanings_B if speaker_now == "A" else self.meanings_A
-        lexicon_S = self.lexicon_A if speaker_now == "A" else self.lexicon_B
-        lexicon_L = self.lexicon_B if speaker_now == "A" else self.lexicon_A
+        
+        if (speaker_now == "A" and self.pov == "listener") or (speaker_now == "B" and self.pov == "speaker"):
+            lexicon = self.lexicon_A
+        else:
+            lexicon = self.lexicon_B
+        
         model = MemorylessRSATurn(
             meanings_S=meanings_S,
             meanings_L=meanings_L,
             categories=self.categories,
             utterances=self.utterances,
             prior=prior,
-            lexicon_S=lexicon_S,
-            lexicon_L=lexicon_L,
+            lexicon=lexicon,
             alpha=self.alpha,
             costs=self.costs,
             pov=self.pov,

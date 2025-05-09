@@ -3,8 +3,16 @@ import numpy as np
 import lightning as L
 import torch
 from litgpt import LLM as LitGPTLLM
+from .prompts import PromptStyle
+
 
 class LLM(LitGPTLLM):
+
+    @classmethod
+    def load(cls, *args, **kwargs):
+        model = super().load(*args, **kwargs)
+        model.prompt_style = PromptStyle.from_config(model.config)
+        return model
 
     @torch.inference_mode()
     def predict(self, prompt, endings):
@@ -93,7 +101,7 @@ class LLMDialogTurn:
             past_utterances=self.past_utterances,
             llm=self.llm,
         )
-        self.speaker.run()
+        # self.speaker.run()
 
         self.listener = self.listener_cls(
             system_prompt=self.system_prompt_L, 
@@ -101,7 +109,7 @@ class LLMDialogTurn:
             past_utterances=self.past_utterances,
             llm=self.llm,
         )
-        self.listener.run()
+        # self.listener.run()
 
 
 
@@ -130,11 +138,17 @@ class LLMDialog:
         self.turns_history = []
 
     def sample_new_utterance_from_last_speaker(self, meaning_S):
-        utt_dist = self.turns_history[-1].speaker.as_df
+        speaker = self.turns_history[-1].speaker
+        if speaker.has_not_run_yet:
+            speaker.run()
+        utt_dist = speaker.as_df
         return utt_dist[utt_dist == utt_dist.max()].sample(n=1).index[0]
 
     def get_category_dist_from_last_listener(self, new_utt, meaning_L):
-        return self.turns_history[-1].listener.as_df.values.reshape(-1)
+        listener = self.turns_history[-1].listener
+        if listener.has_not_run_yet:
+            listener.run(new_utt=new_utt)
+        return listener.as_df.values.reshape(-1)
 
     def run(self, utterances, speaker_now="A"):
 
