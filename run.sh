@@ -35,7 +35,7 @@ cd /mnt/beegfs/home/estienne/conversations_intelligens/crsa/
 llm="meta-llama/Llama-3.2-1B-Instruct"
 for p in 4 ; do
     for alpha in 1.2 2.0 ; do
-        python -m crsa.scripts.run_findA1 \
+        srun python -m crsa.scripts.run_findA1 \
             --n_possitions $p \
             --models "crsa" "memoryless_rsa" "memoryless_literal" "prior_model" "llmrsa_$llm" "llm_$llm" \
             --n_turns 9 \
