@@ -12,4 +12,4 @@ Precision set
 /mnt/beegfs/home/estienne/anaconda3/envs/crsa/lib/python3.12/site-packages/lightning/fabric/plugins/environments/slurm.py:204: The `srun` command is available on your system but is not used. HINT: If your intention is to run Lightning on SLURM, prepend your python command with `srun` like so: srun python /mnt/beegfs/projects/conversations_intelligens/crsa/ ...
 Fabric launched
 Running model llmrsa_meta-llama/Llama-3.2-1B-Instruct for 100 seeds.
-  0%|          | 0/100 [00:00<?, ?it/s]  1%|          | 1/100 [00:40<1:06:44, 40.45s/it]
+  0%|          | 0/100 [00:00<?, ?it/s]  1%|          | 1/100 [00:40<1:06:44, 40.45s/it]  2%|▏         | 2/100 [01:20<1:05:54, 40.35s/it]  3%|▎         | 3/100 [02:01<1:05:14, 40.35s/it]  4%|▍         | 4/100 [02:41<1:04:33, 40.35s/it]  5%|▌         | 5/100 [03:21<1:03:53, 40.35s/it]  6%|▌         | 6/100 [04:02<1:03:13, 40.35s/it]
