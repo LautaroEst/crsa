@@ -1,10 +1,16 @@
 #!/bin/bash -e
+#SBATCH -J rsa
+#SBATCH -t 4:00:00
+#SBATCH --gres=gpu:1
+
 
 # Source the Conda initialization script
 source ~/anaconda3/etc/profile.d/conda.sh
 # source ~/miniforge3/etc/profile.d/conda.sh
 conda activate crsa
 
+# Go to the crsa repo
+cd /mnt/beegfs/home/estienne/conversations_intelligens/crsa/
 
 
 # python -m crsa.scripts.parameters \
@@ -26,18 +32,18 @@ conda activate crsa
 #     --tolerance 1e-3 \
 #     --seed 1234
 
- #"llm_meta-llama/Llama-3.2-1B-Instruct" \
+llm="meta-llama/Llama-3.2-1B-Instruct"
 for p in 4 ; do
-    for alpha in 1.2 1.5 2.0 ; do
+    for alpha in 1.2 2.0 ; do
         python -m crsa.scripts.run_findA1 \
             --n_possitions $p \
-            --models "crsa" "memoryless_rsa" "memoryless_literal" "prior_model" "llmrsa_EleutherAI/pythia-14m" "llm_EleutherAI/pythia-14m" \
+            --models "crsa" "memoryless_rsa" "memoryless_literal" "prior_model" "llmrsa_$llm" "llm_$llm" \
             --n_turns 9 \
             --alpha $alpha \
             --tolerance 1e-3 \
             --metrics "accuracy" "nll" \
             --seed 1234 \
-            --n_seeds 5
+            --n_seeds 100
     done
 done
 
