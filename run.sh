@@ -10,7 +10,7 @@ source ~/anaconda3/etc/profile.d/conda.sh
 conda activate crsa
 
 # Go to the crsa repo
-cd /mnt/beegfs/home/estienne/conversations_intelligens/crsa/
+# cd /mnt/beegfs/home/estienne/conversations_intelligens/crsa/
 
 
 # python -m crsa.scripts.parameters \
@@ -32,21 +32,32 @@ cd /mnt/beegfs/home/estienne/conversations_intelligens/crsa/
 #     --tolerance 1e-3 \
 #     --seed 1234
 
-llm="meta-llama/Llama-3.2-1B-Instruct"
-for p in 4 ; do
-    for alpha in 1.2 2.0 ; do
-        srun python -m crsa.scripts.run_findA1 \
-            --n_possitions $p \
-            --models "crsa" "memoryless_rsa" "memoryless_literal" "prior_model" "llmrsa_$llm" "llm_$llm" \
-            --n_turns 9 \
-            --alpha $alpha \
-	    --max_depth 1000 \
-            --tolerance 1e-3 \
-            --metrics "accuracy" "nll" \
-            --seed 1234 \
-            --n_seeds 100
-    done
-done
+# llm="meta-llama/Llama-3.2-1B-Instruct"
+# for p in 4 ; do
+#     for alpha in 1.2 2.0 ; do
+#         srun python -m crsa.scripts.run_findA1 \
+#             --n_possitions $p \
+#             --models "crsa" "memoryless_rsa" "memoryless_literal" "prior_model" "llmrsa_$llm" "llm_$llm" \
+#             --n_turns 9 \
+#             --alpha $alpha \
+# 	    --max_depth 1000 \
+#             --tolerance 1e-3 \
+#             --metrics "accuracy" "nll" \
+#             --seed 1234 \
+#             --n_seeds 100
+#     done
+# done
+# llm="meta-llama/Llama-3.2-1B-Instruct"
+# llm="EleutherAI/pythia-14m"
+# for alpha in 2.0 ; do
+#     python -m crsa.scripts.run_infojigsaw \
+#         --models "crsa" "llmrsa_$llm" \
+#         --alpha $alpha \
+#         --max_depth 1000 \
+#         --tolerance 1e-3 \
+#         --metrics "accuracy" "nll" \
+#         --seed 1234
+# done
 
 # python -m crsa.scripts.run_infojigsaw \
 #     --models "crsa" "memoryless_rsa" "memoryless_literal" "prior_model"\
@@ -54,6 +65,16 @@ done
 #     --tolerance 1e-3 \
 #     --seed 1234
 
+
+python -m crsa.scripts.run_findA1 \
+    --game_size 4 \
+    --models "crsa" "rsa" \
+    --metrics "accuracy" "nll" \
+    --n_turns 9 \
+    --alpha 2.0 \
+    --tolerance 1e-3 \
+    --seed 7423 \
+    --n_seeds 100 \
 
 # Finish
 conda deactivate

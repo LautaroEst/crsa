@@ -44,8 +44,9 @@
             "request": "launch",
             "module": "crsa.scripts.run_infojigsaw",
             "args": [
-                "--models", "literal", "multi_rsa", "crsa",
+                "--models", "crsa", "llmrsa_EleutherAI/pythia-14m",
                 "--alpha", "2.0",
+                "--metrics", "accuracy", "nll",
                 "--tolerance", "1e-3",
                 "--seed", "12345",
             ]    
