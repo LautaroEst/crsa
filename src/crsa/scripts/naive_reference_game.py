@@ -9,28 +9,15 @@ from typing import List
 import numpy as np
 import pandas as pd
 
-from ..src.naive.find_a1 import FindA1Dataset
-from ..src.evaluate import compute_metric
-from ..src.naive.plot_turns import plot_turns
-from ..src.naive.crsa import CRSA
-from ..src.naive.rsa import RSA
+from ..src import FindA1Dataset
+from ..src import compute_metric
+from ..src import plot_turns
+from ..src import CRSA
+from ..src import RSA
+from ..src import Literal
+from ..src import init_logger
 
-def init_logger(output_dir: Path):
-    script_logger = logging.getLogger(__name__)
-    console = logging.StreamHandler()
-    script_logger.addHandler(console)
-    now = time.strftime("%Y-%m-%d-%H-%M-%S")
-    file_handler = logging.FileHandler(output_dir / f"{now}.log", mode="w", encoding="utf-8")
-    file_handler.setFormatter(
-        logging.Formatter(
-            "{asctime} - {levelname} - {message}",
-            style="{",
-            datefmt="%Y-%m-%d %H:%M:%S"
-        )
-    )
-    script_logger.addHandler(file_handler)
-    script_logger.setLevel(logging.INFO)
-    return script_logger
+
 
 def check_iter_args(alpha, max_depth, tolerance):
     if max_depth is None and tolerance is None:
@@ -72,6 +59,18 @@ def init_model(model_name: str, world: dict, alpha: float = 1.0, max_depth: int 
             max_depth=max_depth,
             tolerance=tolerance,
         )
+    elif model_name == "literal":
+        model = Literal(
+            meanings_A=world["meanings_A"], 
+            meanings_B=world["meanings_B"], 
+            categories=world["categories"], 
+            utterances=world["utterances"], 
+            lexicon_A=world["lexicon_A"], 
+            lexicon_B=world["lexicon_B"], 
+            prior=world["prior"], 
+            costs=world["costs"],
+            alpha=alpha,
+        )
     else:
         raise ValueError(f"Model {model_name} not found.")
     return model
@@ -112,7 +111,7 @@ def main(
 
         model_results = []
         # Run the model for each sample
-        for i, (idx, meaning_A, meaning_B, cat) in enumerate(dataset.iter_samples()):
+        for i, (idx, meaning_A, meaning_B, utterances, cat) in enumerate(dataset.iter_samples()):
             
             # Log progress
             if i % (len(dataset) // 20) == 0:

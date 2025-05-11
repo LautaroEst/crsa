@@ -3,46 +3,27 @@ import pandas as pd
 import numpy as np
 from scipy.special import softmax
 
-from .utils import (
-    INF, ZERO,
+from ..utils import (
+    ZERO, INF
 )
 
 
 class Listener:
 
-    def __init__(self, categories, meanings, utterances, prior, dm=None):
-        self.categories = categories
+    def __init__(self, meanings, utterances, categories, prior, lexicon):
         self.meanings = meanings
         self.utterances = utterances
+        self.categories = categories
         self.prior = prior
-        self.dm = dm
+        self.lexicon = lexicon
         self.history = []
 
-    def compute_literal(self, lexicon):
-
-        if self.dm is None:
-            # lexicon(u,a), prior(a,b,y)
-            literal_listener = np.einsum('ua,aby->uby', lexicon, self.prior)
-        else:
-            # lexicon(u,a), prior(a,b,y), dm(a,b)
-            literal_listener = np.einsum('a,aby,ua->uby', self.dm, self.prior, lexicon)
-        
-        literal_listener[literal_listener <= ZERO] = ZERO
-        norm_term = literal_listener.sum(axis=-1, keepdims=True)
-        norm_term[norm_term <= ZERO] = ZERO
-        literal_listener = literal_listener / norm_term
-        self.history.append(literal_listener)
-    
     def update(self, speaker):
         speaker_arr = speaker.as_array.copy()
         speaker_arr[speaker_arr <= ZERO] = ZERO
 
-        if self.dm is None:
-            # lexicon(u,a), prior(a,b,y)
-            pragmatic_listener = np.einsum('au,aby->uby', speaker_arr, self.prior)
-        else:
-            # prior(a,b,y), dm(a,b), speaker(a,u)
-            pragmatic_listener = np.einsum('a,aby,au->uby', self.dm, self.prior, speaker_arr)
+        # lexicon(u,a), prior(a,b,y)
+        pragmatic_listener = np.einsum('au,aby->uby', speaker_arr, self.prior)
 
         pragmatic_listener[pragmatic_listener <= ZERO] = ZERO
         norm_term = pragmatic_listener.sum(axis=-1, keepdims=True)
@@ -50,36 +31,38 @@ class Listener:
         pragmatic_listener = pragmatic_listener / norm_term
         self.history.append(pragmatic_listener)
 
-    @property
-    def literal_as_array(self):
-        return self.history[0]
-    
-    @property
-    def literal_as_df(self):
-        return pd.DataFrame(self.history[0].reshape(-1,len(self.categories)), index=pd.MultiIndex.from_product([self.utterances, self.meanings], names=["utterance", "meaning"]), columns=self.categories)
-        
+    def compute_literal(self):
+        literal_listener = np.einsum('ua,aby->uby', self.lexicon, self.prior)
+        literal_listener[literal_listener <= ZERO] = ZERO
+        norm_term = literal_listener.sum(axis=-1, keepdims=True)
+        norm_term[norm_term <= ZERO] = ZERO
+        literal_listener = literal_listener / norm_term
+        self.history.append(literal_listener)
+
     @property
     def as_array(self):
         return self.history[-1]
     
     @property
     def as_df(self):
-        return pd.DataFrame(self.history[-1].reshape(-1,len(self.categories)), index=pd.MultiIndex.from_product([self.utterances, self.meanings], names=["utterance", "meaning"]), columns=self.categories)
-
-
+        return pd.DataFrame(
+            self.history[-1].reshape(-1, len(self.categories)),
+            index=pd.MultiIndex.from_product([self.utterances, self.meanings], names=["utterance", "meaning"]), 
+            columns=self.categories
+        )
+    
 class Speaker:
 
-    def __init__(self, meanings, utterances, prior, dm=None, cost=None, alpha=1.0):
+    def __init__(self, meanings, utterances, prior, lexicon, alpha, costs):
         self.meanings = meanings
         self.utterances = utterances
         self.prior = prior
-        self.dm = dm
-        self.cost = cost if cost is not None else np.zeros(len(utterances), dtype=float)
+        self.lexicon = lexicon
         self.alpha = alpha
+        self.costs = costs
         self.history = []
 
     def update(self, listener):
-
         # Compute the conditional priors 
         prior = self.prior.copy()
         prior[prior <= ZERO] = ZERO
@@ -87,9 +70,7 @@ class Speaker:
         prior_a = prior_ab.sum(axis=1, keepdims=True) # P(a)
         prior_ab[prior_ab <= ZERO] = ZERO
         prior_a[prior_a <= ZERO] = ZERO
-        prior_b_given_a = prior_ab / prior_a # P(b|a)
         prior_by_given_a = prior / prior_a # P(b,y|a)
-        prior_y_given_ab = prior / prior_ab[:,:,np.newaxis] # P(y|a,b)
 
         # Compute the log_listener
         listener_arr = listener.as_array.copy()
@@ -98,39 +79,47 @@ class Speaker:
         log_listener[mask] = np.log(listener_arr[mask])
         log_listener[~mask] = -INF
 
-        if self.dm is None:
-            # Compute the pragmatic speaker
-            log_pragmatic_speaker = self.alpha * np.einsum('aby,uby->au', prior_by_given_a, log_listener) - self.cost.reshape(1,-1)
-        else:
-            # Compute the quotient of dm
-            dm_num = np.einsum('b,ab->ab', self.dm, prior_b_given_a)
-            dm_num[dm_num <= ZERO] = ZERO
-            dm_frac = dm_num / dm_num.sum(axis=1, keepdims=True)
-            dm_frac[dm_frac <= ZERO] = ZERO
-
-            # Compute the pragmatic speaker
-            log_pragmatic_speaker = self.alpha * np.einsum('ab,aby,uby->au', dm_frac, prior_y_given_ab, log_listener) - self.cost.reshape(1,-1)
-        
+        # Compute the pragmatic speaker
+        log_pragmatic_speaker = self.alpha * np.einsum('aby,uby->au', prior_by_given_a, log_listener) - self.costs.reshape(1,-1)
         pragmatic_speaker = softmax(log_pragmatic_speaker, axis=1)
         pragmatic_speaker[pragmatic_speaker <= ZERO] = ZERO
         self.history.append(pragmatic_speaker)
+
+
+    def compute_literal(self):
+        # Compute the conditional priors 
+        prior = self.prior.copy()
+        prior[prior <= ZERO] = ZERO
+        prior_ab = prior.sum(axis=2) # P(a,b)
+        prior_a = prior_ab.sum(axis=1, keepdims=True) # P(a)
+        prior_ab[prior_ab <= ZERO] = ZERO
+        prior_a[prior_a <= ZERO] = ZERO
+        prior_b_given_a = prior_ab / prior_a # P(b|a)
+
+        mask = self.lexicon > 0
+        log_lexicon = np.zeros_like(self.lexicon, dtype=float)
+        log_lexicon[mask] = np.log(self.lexicon[mask])
+        log_lexicon[~mask] = -INF
+        literal_speaker = softmax(self.alpha * np.einsum("ub,ab->au",log_lexicon - self.costs.reshape(-1,1), prior_b_given_a), axis=1)
+        self.history.append(literal_speaker)        
         
     @property
     def as_array(self):
-        if self.history:
-            return self.history[-1]
+        return self.history[-1]
     
     @property
     def as_df(self):
-        return pd.DataFrame(self.history[-1], index=pd.Index(self.meanings, name="meaning"), columns=self.utterances)
+        return pd.DataFrame(
+            self.history[-1], 
+            index=pd.Index(self.meanings, name="meaning"), 
+            columns=self.utterances
+        )
+    
 
+class RSAGain:
 
-class CRSAGain:
-
-    def __init__(self, prior, dm_s, dm_l, cost, alpha):
+    def __init__(self, prior, cost, alpha):
         self.prior = prior
-        self.dm_s = dm_s if dm_s is not None else np.ones(prior.shape[0])
-        self.dm_l = dm_l if dm_l is not None else np.ones(prior.shape[1])
         self.cost = cost
         self.alpha = alpha
         self.cond_entropy_history = []
@@ -138,8 +127,6 @@ class CRSAGain:
         self.gain_history = []
         
     def _compute_cond_entropy(self, speaker):
-        dm_s = self.dm_s.copy()
-        dm_s[dm_s <= ZERO] = ZERO
         prior = self.prior.copy().sum(axis=1).sum(axis=1)
         prior[prior <= ZERO] = ZERO
         speaker_arr = speaker.as_array.copy()
@@ -147,11 +134,9 @@ class CRSAGain:
         mask = speaker_arr > 0
         log_speaker_times_speaker[mask] = speaker_arr[mask] * np.log(speaker_arr[mask])
         log_speaker_times_speaker[~mask] = ZERO # approx 0 * log(0) = 0
-        return -np.einsum('a,a,au->', dm_s, prior, log_speaker_times_speaker)
+        return -np.einsum('a,au->', prior, log_speaker_times_speaker)
     
     def _compute_listener_value(self, speaker, listener):
-        dm = np.outer(self.dm_s, self.dm_l)
-        dm[dm <= ZERO] = ZERO
         prior = self.prior.copy()
         prior[prior <= ZERO] = ZERO
         speaker_arr = speaker.as_array.copy()
@@ -160,7 +145,7 @@ class CRSAGain:
         mask = listener_arr > 0
         log_listener[mask] = np.log(listener_arr[mask])
         log_listener[~mask] = -INF
-        return np.einsum('ab,aby,au,uby->', dm, prior, speaker_arr, log_listener)
+        return np.einsum('aby,au,uby->', prior, speaker_arr, log_listener)
 
     def compute_gain(self, listener, speaker):
         if speaker.as_array is None:
@@ -179,53 +164,29 @@ class CRSAGain:
         return abs(self.gain_history[-1] - self.gain_history[-2]) / abs(self.gain_history[-2])
 
 
+class RSATurn:
 
-class CRSATurn:
-    
-    def __init__(
-        self,
-        meanings_S,
-        meanings_L,
-        categories,
-        utterances,
-        prior,
-        lexicon,
-        ds,
-        dl,
-        cost,
-        alpha,
-        max_depth,
-        tolerance,
-    ):
+    def __init__(self, meanings_S, meanings_L, categories, utterances, lexicon, prior, alpha=1.0, costs=None, max_depth=100, tolerance=1e-5):
         self.meanings_S = meanings_S
         self.meanings_L = meanings_L
         self.categories = categories
         self.utterances = utterances
-        self.cost = cost
         self.lexicon = lexicon
         self.prior = prior
-        self.ds = ds
-        self.dl = dl
         self.alpha = alpha
+        self.costs = costs if costs is not None else np.zeros(len(utterances))
         self.max_depth = max_depth
         self.tolerance = tolerance
 
-        self.speaker = None
-        self.listener = None
-        self.gain = None
+        self.speaker = Speaker(meanings_S, utterances, prior, None, alpha, costs)
+        self.listener = Listener(meanings_L, utterances, categories, prior, lexicon)
+        self.listener.compute_literal()
+        self.gain = RSAGain(prior, costs, alpha)
 
     def run(self):
-
-        # Init agents
-        self.listener = Listener(self.categories, self.meanings_L, self.utterances, self.prior, self.ds)
-        self.listener.compute_literal(self.lexicon)
-        self.speaker = Speaker(self.meanings_S, self.utterances, self.prior, self.dl, self.cost, self.alpha)
-        self.gain = CRSAGain(self.prior, self.ds, self.dl, self.cost, self.alpha)
-
         # Run the model for the given number of iterations
         i = 0
         while i < self.max_depth:
-
             # First update the speaker then the listener
             self.speaker.update(self.listener)
             self.listener.update(self.speaker)
@@ -238,31 +199,29 @@ class CRSATurn:
 
 
 
-class CRSA:
+class RSA:
 
-    def __init__(self, meanings_A, meanings_B, categories, utterances, lexicon_A, lexicon_B, prior, costs=None, alpha=1.0, max_depth=None, tolerance=1e-6):
-        
-        # World parameters
+    def __init__(self, meanings_A, meanings_B, categories, utterances, lexicon_A, lexicon_B, prior, alpha=1.0, costs=None, max_depth=100, tolerance=1e-5):
         self.round_meaning_A = None
         self.meanings_A = meanings_A
         self.round_meaning_B = None
         self.meanings_B = meanings_B
         self.categories = categories
         self.utterances = utterances
-        self.lexicon_A = np.asarray(lexicon_A, dtype=float)
-        self.lexicon_B = np.asarray(lexicon_B, dtype=float)
-        self.prior = np.asarray(prior, dtype=float)
-        self.prior = self.prior
-
-        # Pragmatic parameters
-        self.costs = np.asarray(costs, dtype=float) if costs is not None else np.zeros(len(utterances))
+        self.lexicon_A = lexicon_A
+        self.lexicon_B = lexicon_B
+        self.prior = prior # P(a,b,y)
         self.alpha = alpha
-        
-        # Iteration parameters
+        self.costs = costs if costs is not None else np.zeros(len(utterances))
         self.max_depth = max_depth
         self.tolerance = tolerance
+        self.past_utterances = []
+        self.speaker_now = None
+        self.turns_history = []
 
-        # History
+    def reset(self, meaning_A, meaning_B):
+        self.round_meaning_A = meaning_A
+        self.round_meaning_B = meaning_B
         self.past_utterances = []
         self.turns_history = []
 
@@ -292,21 +251,18 @@ class CRSA:
         meanings_L = self.meanings_B if speaker == "A" else self.meanings_A
         lexicon = self.lexicon_A if speaker == "A" else self.lexicon_B
         prior = self.prior.copy() if speaker == "A" else self.prior.copy().transpose(1, 0, 2)
-        ds, dl = self._compute_dialog_model(self.past_utterances, speaker)
-
-        model = CRSATurn(
+        
+        model = RSATurn(
             meanings_S=meanings_S,
             meanings_L=meanings_L,
             categories=self.categories,
             utterances=self.utterances,
             prior=prior,
             lexicon=lexicon,
-            ds=ds,
-            dl=dl,
-            cost=self.costs,
             alpha=self.alpha,
+            costs=self.costs,
             max_depth=self.max_depth,
-            tolerance=self.tolerance,
+            tolerance=self.tolerance
         )
         model.run()
         self.turns_history.append(model)
@@ -314,26 +270,9 @@ class CRSA:
         # Sample the utterance
         meaning_S = self.round_meaning_A if speaker == "A" else self.round_meaning_B
         self._sample_utterance(meaning_S, speaker)
-        
-    
-    def _compute_dialog_model(self, past_utterances, speaker):
-        if not past_utterances:
-            return None, None
-        
-        ds, dl = [], []
-        for data, model in zip(past_utterances, self.turns_history):
-            utt_idx = self.utterances.index(data["utterance"])
-            if data["speaker"] == speaker:
-                ds.append(model.speaker.as_array[:, utt_idx])
-            else:
-                dl.append(model.speaker.as_array[:, utt_idx])
-        
-        ds_arr = np.ones(len(self.meanings_A if speaker == "A" else self.meanings_B))
-        for d in ds:
-            ds_arr *= d
 
-        dl_arr = np.ones(len(self.meanings_B if speaker == "A" else self.meanings_A))
-        for d in dl:
-            dl_arr *= d
         
-        return ds_arr, dl_arr
+
+
+    
+        

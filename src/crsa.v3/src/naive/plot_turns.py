@@ -8,6 +8,7 @@ from ..evaluate import metric2name
 model2name = {
     "crsa": "CRSA",
     "rsa": "RSA",
+    "literal": "Literal",
 }
 
 def plot_turns(df, models, metrics, output_dir):

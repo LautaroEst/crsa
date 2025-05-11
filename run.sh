@@ -68,7 +68,7 @@ conda activate crsa
 
 python -m crsa.scripts.run_findA1 \
     --game_size 4 \
-    --models "crsa" "rsa" \
+    --models "crsa" "rsa" "literal" \
     --metrics "accuracy" "nll" \
     --n_turns 9 \
     --alpha 2.0 \
