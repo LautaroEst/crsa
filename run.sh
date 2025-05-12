@@ -66,11 +66,10 @@ conda activate crsa
 #     --seed 1234
 
 
-python -m crsa.scripts.run_findA1 \
+python -m crsa.scripts.naive_reference_game \
     --game_size 4 \
-    --models "crsa" "rsa" "literal" \
+    --models "crsa" "rsa" "literal" "prior" \
     --metrics "accuracy" "nll" \
-    --n_turns 9 \
     --alpha 2.0 \
     --tolerance 1e-3 \
     --seed 7423 \

@@ -1,21 +1,18 @@
 
 import argparse
+from copy import deepcopy
 from itertools import cycle
 import logging
 from pathlib import Path
-import time
 from typing import List
 
 import numpy as np
 import pandas as pd
 
-from ..src import FindA1Dataset
-from ..src import compute_metric
-from ..src import plot_turns
-from ..src import CRSA
-from ..src import RSA
-from ..src import Literal
-from ..src import init_logger
+from ..src.naive_models import NaiveCRSA, NaiveRSA, NaiveLiteral, Prior
+from ..src.datasets import FindA1Dataset
+from ..src.evaluate import plot_turns, compute_metric
+from ..src.utils import init_logger
 
 
 
@@ -32,7 +29,7 @@ def check_iter_args(alpha, max_depth, tolerance):
 def init_model(model_name: str, world: dict, alpha: float = 1.0, max_depth: int = None, tolerance: float = None):
     alpha, max_depth, tolerance = check_iter_args(alpha, max_depth, tolerance)
     if model_name == "crsa":    
-        model = CRSA(
+        model = NaiveCRSA(
             meanings_A=world["meanings_A"], 
             meanings_B=world["meanings_B"], 
             categories=world["categories"], 
@@ -46,7 +43,7 @@ def init_model(model_name: str, world: dict, alpha: float = 1.0, max_depth: int 
             tolerance=tolerance,
         )
     elif model_name == "rsa":
-        model = RSA(
+        model = NaiveRSA(
             meanings_A=world["meanings_A"], 
             meanings_B=world["meanings_B"], 
             categories=world["categories"], 
@@ -60,7 +57,7 @@ def init_model(model_name: str, world: dict, alpha: float = 1.0, max_depth: int 
             tolerance=tolerance,
         )
     elif model_name == "literal":
-        model = Literal(
+        model = NaiveLiteral(
             meanings_A=world["meanings_A"], 
             meanings_B=world["meanings_B"], 
             categories=world["categories"], 
@@ -71,6 +68,13 @@ def init_model(model_name: str, world: dict, alpha: float = 1.0, max_depth: int 
             costs=world["costs"],
             alpha=alpha,
         )
+    elif model_name == "prior":
+        model = Prior(
+            meanings_A=world["meanings_A"], 
+            meanings_B=world["meanings_B"], 
+            categories=world["categories"], 
+            prior=world["prior"], 
+        )
     else:
         raise ValueError(f"Model {model_name} not found.")
     return model
@@ -80,7 +84,6 @@ def main(
     game_size: int = 3,
     models: List[str] = ["crsa"],
     metrics: List[str] = ["accuracy", "nll"],
-    n_turns: int = 10,
     alpha: float = 1.0,
     max_depth: int = None,
     tolerance: float = None,
@@ -120,7 +123,7 @@ def main(
             cat_idx = dataset.world["categories"].index(cat)
             model.reset(meaning_A, meaning_B)
             # Run the model for each turn
-            for turn, speaker in zip(range(1, n_turns + 1), cycle("AB")):
+            for turn, speaker in zip(range(1, game_size + 1), cycle("AB")):
                 model.run_turn(speaker)
                 cat_dist = model.get_category_distribution()
                 model_results.append({
@@ -160,7 +163,6 @@ def parse_args():
     parser.add_argument("--game_size", type=int, help="Number of positions of the Find A1 Game", default=3)
     parser.add_argument("--models", type=str, nargs="+", help="Models to run", default=["crsa_sample"])
     parser.add_argument("--metrics", type=str, nargs="+", help="Metrics to use", default=["accuracy"])
-    parser.add_argument("--n_turns", type=int, help="Number of turns", default=5)
     parser.add_argument("--alpha", type=float, help="Alpha to run CRSA with", default=[1.0])
     parser.add_argument("--max_depth", type=int_or_inf, help="Max depth to run CRSA with", default=None)
     parser.add_argument("--tolerance", type=float, help="Tolerance to run CRSA with", default=None)
@@ -169,18 +171,17 @@ def parse_args():
     args = parser.parse_args()
 
     # Create output directory
-    output_dir = Path("outputs") / Path(__file__).stem / f"game_size={args.game_size}" / f"n_turns={args.n_turns}" / f"alpha={args.alpha}"
+    output_dir = Path("outputs") / Path(__file__).stem / f"game_size={args.game_size}" / f"alpha={args.alpha}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Initialize logger
-    logger = init_logger(output_dir)
+    logger = init_logger(__name__, output_dir)
 
     # Update configuration
     main_args = {
         "game_size": args.game_size,
         "models": args.models,
         "metrics": args.metrics,
-        "n_turns": args.n_turns,
         "alpha": args.alpha,
         "max_depth": args.max_depth,
         "tolerance": args.tolerance,
