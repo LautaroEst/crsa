@@ -65,9 +65,6 @@ def main(
     for i, sample in enumerate(dataset.iter_samples()):
         if i < current_sample:
             continue
-
-        if i > 3:
-            break
         
         # Log and save progress
         logger.info(f"Running sample {i}/{len(dataset)}")
@@ -86,8 +83,8 @@ def main(
                 speaker=utterance["speaker"]
             )
             all_logits = []
-            for prompt in prompts[:2]:
-                logits = model.predict(prompt, world["unique_utterances"][:3])
+            for prompt in prompts:
+                logits = model.predict(prompt, world["unique_utterances"])
                 all_logits.append(logits)
             all_logits = np.vstack(all_logits).T # L(u,m)
 

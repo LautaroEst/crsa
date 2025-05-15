@@ -10,7 +10,7 @@ source ~/anaconda3/etc/profile.d/conda.sh
 conda activate crsa
 
 # Go to the crsa repo
-# cd /mnt/beegfs/home/estienne/conversations_intelligens/crsa/
+cd /mnt/beegfs/home/estienne/conversations_intelligens/crsa/
 
 
 # python -m crsa.scripts.parameters \
@@ -80,8 +80,10 @@ conda activate crsa
 #     --tolerance 1e-3 \
 #     --seed 7423
 
-python -m crsa.scripts.run_mddial \
-    --base_model "EleutherAI/pythia-70m" \
+base_model="meta-llama/Llama-3.2-1B-Instruct"
+#base_model="EleutherAI/pythia-70m"
+srun python -m crsa.scripts.run_mddial \
+    --base_model $base_model \
     --save_every 2 \
     --seed 1234 
 
