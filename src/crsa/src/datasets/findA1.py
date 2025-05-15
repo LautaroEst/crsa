@@ -16,8 +16,8 @@ class FindA1Dataset:
         world = {
             "meanings_A": ["".join(l) for l in product("AB", repeat=self.game_size)],
             "meanings_B": ["".join(n) for n in product("12", repeat=self.game_size)],
-            "categories": ["There is no A1 card"] + [f"The card A1 is at possition {i+1}" for i in range(self.game_size)],
-            "utterances": [f"The card A1 is at possition {i+1}" for i in range(self.game_size)],
+            "categories": ["There is no A1 card"] + [f"The card A1 is at position {i+1}" for i in range(self.game_size)],
+            "utterances": [f"Position {i+1}" for i in range(self.game_size)],
         }
 
         prior = np.zeros((2**self.game_size,2**self.game_size,self.game_size+1))

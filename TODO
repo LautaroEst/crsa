@@ -1,11 +1,5 @@
 
-- Implement naive models
-- run script of simulation and move the plots to the overleaf
-- write simulation section of the paper
-- write intro
-- write related work
-- write equations sections
 - write proof in the appendix
-- implement the neural models
-- plot results and move it to the overleaf
+- implement script to run P_lm(u|m) for all u,m in mddial P_lm(m,w) with the last word of the doctor
+- implement LLMCRSA, LLMRSA y LLM with those posteriors and extract the nll of the task and the utterances
 - write results of that section

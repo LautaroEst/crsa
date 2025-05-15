@@ -138,7 +138,7 @@ class LiteralTurn:
 
 class NaiveLiteral:
 
-    def __init__(self, meanings_A, meanings_B, categories, utterances, lexicon_A, lexicon_B, prior, alpha=1.0, costs=None):
+    def __init__(self, meanings_A, meanings_B, categories, utterances, lexicon_A, lexicon_B, prior, alpha=1.0, costs=None, update_lexicon=False):
         self.round_meaning_A = None
         self.meanings_A = meanings_A
         self.round_meaning_B = None
@@ -153,6 +153,7 @@ class NaiveLiteral:
         self.past_utterances = []
         self.speaker_now = None
         self.turns_history = []
+        self.update_lexicon = update_lexicon
 
     def reset(self, meaning_A, meaning_B):
         self.round_meaning_A = meaning_A
@@ -188,6 +189,14 @@ class NaiveLiteral:
         lexicon_L = self.lexicon_B if speaker == "A" else self.lexicon_A
         prior = self.prior.copy() if speaker == "A" else self.prior.copy().transpose(1, 0, 2)
         
+        for lexicon in [lexicon_S, lexicon_L]:
+            if self.update_lexicon:
+                past_utt_idx = [self.utterances.index(utt["utterance"]) for utt in self.past_utterances[:-1]]
+                for utt in self.utterances:
+                    utt_idx = self.utterances.index(utt)
+                    if utt_idx in past_utt_idx and utt != self.past_utterances[-1]["utterance"]:
+                        lexicon[utt_idx,:] = 0
+
         model = LiteralTurn(
             meanings_S=meanings_S,
             meanings_L=meanings_L,

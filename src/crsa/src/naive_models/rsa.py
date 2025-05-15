@@ -199,7 +199,7 @@ class RSATurn:
 
 class NaiveRSA:
 
-    def __init__(self, meanings_A, meanings_B, categories, utterances, lexicon_A, lexicon_B, prior, alpha=1.0, costs=None, max_depth=100, tolerance=1e-5):
+    def __init__(self, meanings_A, meanings_B, categories, utterances, lexicon_A, lexicon_B, prior, alpha=1.0, costs=None, max_depth=100, tolerance=1e-5, update_lexicon=False):
         self.round_meaning_A = None
         self.meanings_A = meanings_A
         self.round_meaning_B = None
@@ -216,6 +216,7 @@ class NaiveRSA:
         self.past_utterances = []
         self.speaker_now = None
         self.turns_history = []
+        self.update_lexicon = update_lexicon
 
     def reset(self, meaning_A, meaning_B):
         self.round_meaning_A = meaning_A
@@ -247,8 +248,16 @@ class NaiveRSA:
             raise ValueError("Please set the round meanings before running the model by calling the reset method.")
         meanings_S = self.meanings_A if speaker == "A" else self.meanings_B
         meanings_L = self.meanings_B if speaker == "A" else self.meanings_A
-        lexicon = self.lexicon_A if speaker == "A" else self.lexicon_B
         prior = self.prior.copy() if speaker == "A" else self.prior.copy().transpose(1, 0, 2)
+
+        lexicon = self.lexicon_A.copy() if speaker == "A" else self.lexicon_B.copy()
+        if self.update_lexicon:
+            past_utt_idx = [self.utterances.index(utt["utterance"]) for utt in self.past_utterances[:-1]]
+            for utt in self.utterances:
+                utt_idx = self.utterances.index(utt)
+                if utt_idx in past_utt_idx and utt != self.past_utterances[-1]["utterance"]:
+                    lexicon[utt_idx,:] = 0
+
         
         model = RSATurn(
             meanings_S=meanings_S,

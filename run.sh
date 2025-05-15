@@ -66,14 +66,24 @@ conda activate crsa
 #     --seed 1234
 
 
-python -m crsa.scripts.naive_reference_game \
-    --game_size 4 \
-    --models "crsa" "rsa" "literal" "prior" \
-    --metrics "accuracy" "nll" \
-    --alpha 2.0 \
-    --tolerance 1e-3 \
-    --seed 7423 \
-    --n_seeds 100 \
+# python -m crsa.scripts.naive_reference_game \
+#     --game_size 6 \
+#     --models "crsa" "crsa_wm" "rsa" "rsa_wm" "literal" "literal_wm" "prior" \
+#     --alpha 2.5 \
+#     --tolerance 1e-3 \
+#     --seed 7423 \
+#     --n_seeds 500 \
+
+# python -m crsa.scripts.medical_diagnosis \
+#     --models "crsa" "prior" \
+#     --alpha 2.5 \
+#     --tolerance 1e-3 \
+#     --seed 7423
+
+python -m crsa.scripts.run_mddial \
+    --base_model "EleutherAI/pythia-70m" \
+    --save_every 2 \
+    --seed 1234 
 
 # Finish
 conda deactivate

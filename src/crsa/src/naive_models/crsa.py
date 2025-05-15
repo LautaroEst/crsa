@@ -238,7 +238,7 @@ class CRSATurn:
 
 class NaiveCRSA:
 
-    def __init__(self, meanings_A, meanings_B, categories, utterances, lexicon_A, lexicon_B, prior, costs=None, alpha=1.0, max_depth=None, tolerance=1e-6):
+    def __init__(self, meanings_A, meanings_B, categories, utterances, lexicon_A, lexicon_B, prior, costs=None, alpha=1.0, max_depth=None, tolerance=1e-6, update_lexicon=False):
         
         # World parameters
         self.round_meaning_A = None
@@ -263,12 +263,18 @@ class NaiveCRSA:
         # History
         self.past_utterances = []
         self.turns_history = []
+        # self.belief_A = np.ones(len(meanings_A), dtype=float)
+        # self.belief_B = np.ones(len(meanings_B), dtype=float)
+        self.belief_A = None
+        self.belief_B = None
+        self.update_lexicon = update_lexicon
 
     def _sample_utterance(self, meaning_S, speaker_now):
         speaker = self.turns_history[-1].speaker.as_df
         utt_dist = speaker.loc[meaning_S,:].squeeze()
         new_utt = utt_dist[utt_dist == utt_dist.max()].index[0]
         self.past_utterances.append({"utterance": new_utt, "speaker": speaker_now})
+        return new_utt
 
     def get_category_distribution(self):
         if not self.turns_history:
@@ -282,15 +288,26 @@ class NaiveCRSA:
         self.round_meaning_B = meaning_B
         self.past_utterances = []
         self.turns_history = []
+        self.belief_A = None
+        self.belief_B = None
 
     def run_turn(self, speaker="A"):
         if self.round_meaning_A is None or self.round_meaning_B is None:
             raise ValueError("Please set the round meanings before running the model by calling the reset method.")
         meanings_S = self.meanings_A if speaker == "A" else self.meanings_B
         meanings_L = self.meanings_B if speaker == "A" else self.meanings_A
-        lexicon = self.lexicon_A if speaker == "A" else self.lexicon_B
         prior = self.prior.copy() if speaker == "A" else self.prior.copy().transpose(1, 0, 2)
-        ds, dl = self._compute_dialog_model(self.past_utterances, speaker)
+        belief_S = self.belief_A if speaker == "A" else self.belief_B
+        belief_L = self.belief_B if speaker == "A" else self.belief_A
+
+        lexicon = self.lexicon_A.copy() if speaker == "A" else self.lexicon_B.copy()
+        if self.update_lexicon:
+            past_utt_idx = [self.utterances.index(utt["utterance"]) for utt in self.past_utterances[:-1]]
+            for utt in self.utterances:
+                utt_idx = self.utterances.index(utt)
+                if utt_idx in past_utt_idx and utt != self.past_utterances[-1]["utterance"]:
+                    lexicon[utt_idx,:] = 0
+
 
         model = CRSATurn(
             meanings_S=meanings_S,
@@ -299,8 +316,8 @@ class NaiveCRSA:
             utterances=self.utterances,
             prior=prior,
             lexicon=lexicon,
-            ds=ds,
-            dl=dl,
+            ds=belief_S,
+            dl=belief_L,
             cost=self.costs,
             alpha=self.alpha,
             max_depth=self.max_depth,
@@ -311,27 +328,19 @@ class NaiveCRSA:
 
         # Sample the utterance
         meaning_S = self.round_meaning_A if speaker == "A" else self.round_meaning_B
-        self._sample_utterance(meaning_S, speaker)
-        
-    
-    def _compute_dialog_model(self, past_utterances, speaker):
-        if not past_utterances:
-            return None, None
-        
-        ds, dl = [], []
-        for data, model in zip(past_utterances, self.turns_history):
-            utt_idx = self.utterances.index(data["utterance"])
-            if data["speaker"] == speaker:
-                ds.append(model.speaker.as_array[:, utt_idx])
-            else:
-                dl.append(model.speaker.as_array[:, utt_idx])
-        
-        ds_arr = np.ones(len(self.meanings_A if speaker == "A" else self.meanings_B))
-        for d in ds:
-            ds_arr *= d
+        new_utt = self._sample_utterance(meaning_S, speaker)
 
-        dl_arr = np.ones(len(self.meanings_B if speaker == "A" else self.meanings_A))
-        for d in dl:
-            dl_arr *= d
-        
-        return ds_arr, dl_arr
+        # Update the beliefs
+        utt_idx = self.utterances.index(new_utt)
+        if speaker == "A":
+            if self.belief_A is None:
+                self.belief_A = model.speaker.as_array[:, utt_idx].copy()
+                self.belief_B = np.ones(len(self.meanings_B), dtype=float)
+            else:
+                self.belief_A = self.belief_A * model.speaker.as_array[:, utt_idx]
+        else:
+            if self.belief_B is None:
+                self.belief_B = model.speaker.as_array[:, utt_idx].copy()
+                self.belief_A = np.ones(len(self.meanings_A), dtype=float)
+            else:
+                self.belief_B = self.belief_B * model.speaker.as_array[:, utt_idx]
