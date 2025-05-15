@@ -14,12 +14,12 @@ from ..src.utils import init_logger
 
 
 model2config = {
-    "crsa_wm": {"label": "CRSA $\mathcal{L}(u,m_S,w)$", "color": "tab:blue", "linestyle": "--"},
-    "crsa": {"label": "CRSA $\mathcal{L}(u,m_S)$", "color": "tab:blue", "linestyle": "-"},
-    "rsa_wm": {"label": "RSA $\mathcal{L}(u,m_S,w)$", "color": "tab:orange", "linestyle": "--"},
-    "rsa": {"label": "RSA $\mathcal{L}(u,m_S)$", "color": "tab:orange", "linestyle": "-"},
-    "literal_wm": {"label": "Literal $\mathcal{L}(u,m_S,w)$", "color": "tab:green", "linestyle": "--"},
-    "literal": {"label": "Literal $\mathcal{L}(u,m_S)$", "color": "tab:green", "linestyle": "-"},
+    "crsa_wm": {"label": "CRSA $\\mathcal{L}(u,m_S,w)$", "color": "tab:blue", "linestyle": "--"},
+    "crsa": {"label": "CRSA $\\mathcal{L}(u,m_S)$", "color": "tab:blue", "linestyle": "-"},
+    "rsa_wm": {"label": "RSA $\\mathcal{L}(u,m_S,w)$", "color": "tab:orange", "linestyle": "--"},
+    "rsa": {"label": "RSA $\\mathcal{L}(u,m_S)$", "color": "tab:orange", "linestyle": "-"},
+    "literal_wm": {"label": "Literal $\\mathcal{L}(u,m_S,w)$", "color": "tab:green", "linestyle": "--"},
+    "literal": {"label": "Literal $\\mathcal{L}(u,m_S)$", "color": "tab:green", "linestyle": "-"},
     "prior": {"label": "Prior $P(y|m_L)$", "color": "tab:red", "linestyle": "-"},
 }
 
@@ -83,8 +83,9 @@ def main(
                 speaker=utterance["speaker"]
             )
             all_logits = []
+            unique_utterances = world["patient_utterances"] if utterance["speaker"] == "patient" else world["doctor_utterances"]
             for prompt in prompts:
-                logits = model.predict(prompt, world["unique_utterances"])
+                logits = model.predict(prompt, unique_utterances)
                 all_logits.append(logits)
             all_logits = np.vstack(all_logits).T # L(u,m)
 

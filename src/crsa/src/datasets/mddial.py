@@ -61,12 +61,16 @@ class MDDialDataset:
             if found:
                 valid_data.append(sample)
 
-        unique_utterances = []
+        doctor_utterances = []
+        patient_utterances = []
         for sample in valid_data:
             for turn in sample["dialog"]:
-                if turn["content"] not in unique_utterances:
-                    unique_utterances.append(turn["content"])
-        world["unique_utterances"] = unique_utterances
+                if turn["speaker"] == "patient" and turn["content"] not in patient_utterances:
+                    patient_utterances.append(turn["content"])
+                elif turn["speaker"] == "doctor" and turn["content"] not in doctor_utterances:
+                    doctor_utterances.append(turn["content"])
+        world["patient_utterances"] = patient_utterances
+        world["doctor_utterances"] = doctor_utterances
 
         shots_ids = [5, 43, 1204, 864]
         shots = []

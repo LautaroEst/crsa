@@ -81,7 +81,7 @@ cd /mnt/beegfs/home/estienne/conversations_intelligens/crsa/
 #     --seed 7423
 
 base_model="meta-llama/Llama-3.2-1B-Instruct"
-#base_model="EleutherAI/pythia-70m"
+# base_model="EleutherAI/pythia-70m"
 srun python -m crsa.scripts.run_mddial \
     --base_model $base_model \
     --save_every 2 \
