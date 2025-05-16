@@ -1,6 +1,6 @@
 #!/bin/bash -e
 #SBATCH -J rsa
-#SBATCH -t 6:00:00
+#SBATCH -t 12:00:00
 #SBATCH --gres=gpu:1
 
 

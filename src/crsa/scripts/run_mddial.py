@@ -43,7 +43,7 @@ def main(
     # Initialize the model
     logger.info(f"Loading model {base_model}")
     model = LLM.load(base_model)
-    model.distribute(accelerator="auto", precision="bf16-true")
+    model.distribute(accelerator="cuda", precision="bf16-true")
 
     # Init dataset
     dataset = MDDialDataset(prompt_style=model.prompt_style)
@@ -84,7 +84,8 @@ def main(
             )
             all_logits = []
             unique_utterances = world["patient_utterances"] if utterance["speaker"] == "patient" else world["doctor_utterances"]
-            for prompt in prompts:
+            for p, prompt in enumerate(prompts):
+                logger.info(f"Running prompt {p}/{len(prompts)}")
                 logits = model.predict(prompt, unique_utterances)
                 all_logits.append(logits)
             all_logits = np.vstack(all_logits).T # L(u,m)
