@@ -31,17 +31,7 @@ class MDDialDataset:
         self.id2symptoms = id2symptoms
         self.disease2symptoms = disease2symptoms
 
-        prior = np.zeros((len(diseases), 1, len(diseases)))
-        for i, d in enumerate(diseases):
-            prior[i, 0, i] = 1.0
-        prior = prior / np.sum(prior)
-
-        world = {
-            "diseases": diseases,
-            "symptoms": [f"symptoms_group_{i}" for i in range(1, len(diseases) + 1)],
-            "prior": prior,
-        }
-
+        d_count = {}
         valid_data = []
         for i, dialog in enumerate(data["dialogues"]):
             sample = {}
@@ -56,10 +46,26 @@ class MDDialDataset:
                     sample["dialog"] = utterances
                     sample["target_disease"] = d
                     sample["symptoms"] = disease2symptoms[d]
+                    sample["symptoms_id"] = f"symptoms_group_{diseases.index(d) + 1}"
                     found = True
+                    if d in d_count:
+                        d_count[d] += 1
+                    else:
+                        d_count[d] = 1
                     break
             if found:
                 valid_data.append(sample)
+
+        prior = np.zeros((len(diseases), 1, len(diseases)))
+        for i, d in enumerate(diseases):
+            prior[i, 0, i] = d_count[d]
+        prior = prior / np.sum(prior)
+
+        world = {
+            "diseases": diseases,
+            "symptoms": [f"symptoms_group_{i}" for i in range(1, len(diseases) + 1)],
+            "prior": prior,
+        }
 
         doctor_utterances = []
         patient_utterances = []
@@ -91,6 +97,7 @@ class MDDialDataset:
         return {
             "dialog_id": record["dialog_id"],
             "symptoms": record["symptoms"],
+            "symptoms_id": record["symptoms_id"],
             "utterances": record["dialog"],
             "disease": record["target_disease"],
         }
@@ -100,6 +107,7 @@ class MDDialDataset:
             yield {
                 "dialog_id": record["dialog_id"],
                 "symptoms": record["symptoms"],
+                "symptoms_id": record["symptoms_id"],
                 "utterances": record["dialog"],
                 "disease": record["target_disease"],
             }

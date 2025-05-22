@@ -10,7 +10,7 @@ source ~/anaconda3/etc/profile.d/conda.sh
 conda activate crsa
 
 # Go to the crsa repo
-cd /mnt/beegfs/home/estienne/conversations_intelligens/crsa/
+# cd /mnt/beegfs/home/estienne/conversations_intelligens/crsa/
 
 
 # python -m crsa.scripts.parameters \
@@ -66,13 +66,14 @@ cd /mnt/beegfs/home/estienne/conversations_intelligens/crsa/
 #     --seed 1234
 
 
-# python -m crsa.scripts.naive_reference_game \
-#     --game_size 6 \
-#     --models "crsa" "crsa_wm" "rsa" "rsa_wm" "literal" "literal_wm" "prior" \
-#     --alpha 2.5 \
-#     --tolerance 1e-3 \
-#     --seed 7423 \
-#     --n_seeds 500 \
+python -m crsa.scripts.naive_reference_game \
+    --game_size 6 \
+    --models "crsa" "crsa_wm" "rsa" "rsa_wm" "literal" "literal_wm" "prior" \
+    --alpha 2.5 \
+    --tolerance 1e-3 \
+    --seed 7423 \
+    --n_seeds 500 \
+    --plot_error_bars \
 
 # python -m crsa.scripts.medical_diagnosis \
 #     --models "crsa" "prior" \
@@ -82,9 +83,12 @@ cd /mnt/beegfs/home/estienne/conversations_intelligens/crsa/
 
 base_model="meta-llama/Llama-3.2-1B-Instruct"
 # base_model="EleutherAI/pythia-70m"
-srun python -m crsa.scripts.run_mddial \
+python -m crsa.scripts.run_mddial \
     --base_model $base_model \
+    --models "crsa" "rsa" \
     --save_every 2 \
+    --alpha 2.5 \
+    --tolerance 1e-3 \
     --seed 1234 
 
 # Finish

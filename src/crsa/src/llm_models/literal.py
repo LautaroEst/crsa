@@ -48,7 +48,8 @@ class Listener:
             index=pd.MultiIndex.from_product([self.utterances, self.meanings], names=["utterance", "meaning"]), 
             columns=self.categories
         )
-    
+
+
 class Speaker:
 
     def __init__(self, meanings, utterances, prior, lexicon, alpha, costs):
@@ -113,93 +114,32 @@ class Speaker:
             columns=self.utterances
         )
     
+class LiteralTurn:
 
-class RSAGain:
-
-    def __init__(self, prior, cost, alpha):
-        self.prior = prior
-        self.cost = cost
-        self.alpha = alpha
-        self.cond_entropy_history = []
-        self.listener_value_history = []
-        self.gain_history = []
-        
-    def _compute_cond_entropy(self, speaker):
-        prior = self.prior.copy().sum(axis=1).sum(axis=1)
-        prior[prior <= ZERO] = ZERO
-        speaker_arr = speaker.as_array.copy()
-        log_speaker_times_speaker = np.zeros_like(speaker_arr, dtype=float)
-        mask = speaker_arr > 0
-        log_speaker_times_speaker[mask] = speaker_arr[mask] * np.log(speaker_arr[mask])
-        log_speaker_times_speaker[~mask] = ZERO # approx 0 * log(0) = 0
-        return -np.einsum('a,au->', prior, log_speaker_times_speaker)
-    
-    def _compute_listener_value(self, speaker, listener):
-        prior = self.prior.copy()
-        prior[prior <= ZERO] = ZERO
-        speaker_arr = speaker.as_array.copy()
-        listener_arr = listener.as_array.copy()
-        log_listener = np.zeros_like(listener_arr, dtype=float)
-        mask = listener_arr > 0
-        log_listener[mask] = np.log(listener_arr[mask])
-        log_listener[~mask] = -INF
-        return np.einsum('aby,au,uby->', prior, speaker_arr, log_listener)
-
-    def compute_gain(self, listener, speaker):
-        if speaker.as_array is None:
-            return np.nan
-        cond_ent = self._compute_cond_entropy(speaker)
-        self.cond_entropy_history.append(cond_ent)
-        listener_value = self._compute_listener_value(speaker, listener)
-        self.listener_value_history.append(listener_value)
-        gain = cond_ent + self.alpha * listener_value
-        self.gain_history.append(gain)
-        return gain
-    
-    def get_diff(self):
-        if len(self.gain_history) < 2:
-            return float("inf")
-        return abs(self.gain_history[-1] - self.gain_history[-2]) / abs(self.gain_history[-2])
-
-
-class RSATurn:
-
-    def __init__(self, meanings_S, meanings_L, categories, utterances, lexicon, prior, alpha=1.0, costs=None, max_depth=100, tolerance=1e-5):
+    def __init__(self, meanings_S, meanings_L, categories, utterances, lexicon_S, lexicon_L, prior, alpha=1.0, costs=None):
         self.meanings_S = meanings_S
         self.meanings_L = meanings_L
         self.categories = categories
         self.utterances = utterances
-        self.lexicon = lexicon
+        self.lexicon_S = lexicon_S
+        self.lexicon_L = lexicon_L
         self.prior = prior
         self.alpha = alpha
         self.costs = costs if costs is not None else np.zeros(len(utterances))
-        self.max_depth = max_depth
-        self.tolerance = tolerance
 
-        self.speaker = Speaker(meanings_S, utterances, prior, None, alpha, costs)
-        self.listener = Listener(meanings_L, utterances, categories, prior, lexicon)
-        self.listener.compute_literal()
-        self.gain = RSAGain(prior, costs, alpha)
+        self.speaker = Speaker(meanings_S, utterances, prior, lexicon_S, alpha, costs)
+        self.listener = Listener(meanings_L, utterances, categories, prior, lexicon_L)
 
     def run(self):
         # Run the model for the given number of iterations
-        i = 0
-        while i < self.max_depth:
-            # First update the speaker then the listener
-            self.speaker.update(self.listener)
-            self.listener.update(self.speaker)
-
-            # Check for convergence
-            gain = self.gain.compute_gain(self.listener, self.speaker)
-            if self.gain.get_diff() < self.tolerance:
-                break
-            i += 1
+        self.listener.compute_literal()
+        # self.speaker.compute_literal()
 
 
 
-class LLMRSA:
+class LLMLiteral:
 
-    def __init__(self, meanings_A, meanings_B, categories, prior, alpha=1.0, max_depth=100, tolerance=1e-5):
+    def __init__(self, meanings_A, meanings_B, categories, prior, alpha=1.0):
         self.round_meaning_A = None
         self.meanings_A = meanings_A
         self.round_meaning_B = None
@@ -207,35 +147,22 @@ class LLMRSA:
         self.categories = categories
         self.prior = prior # P(a,b,y)
         self.alpha = alpha
-        self.max_depth = max_depth
-        self.tolerance = tolerance
         self.past_utterances = []
         self.speaker_now = None
         self.turns_history = []
         self.past_speaker_dist = []
         self.past_lexicon_dist = []
 
-    def reset(self, meaning_A, meaning_B):
-        self.round_meaning_A = meaning_A
-        self.round_meaning_B = meaning_B
-        self.past_utterances = []
-        self.turns_history = []
-        self.past_speaker_dist = []
-        self.past_lexicon_dist = []
-
     def sample_utterance(self, speaker):
-        meaning_S = self.round_meaning_A if speaker == "A" else self.round_meaning_B
-        speaker = self.turns_history[-1].speaker.as_df
-        utt_dist = speaker.loc[meaning_S,:].squeeze()
-        new_utt = utt_dist[utt_dist == utt_dist.max()].index[0]
-        return new_utt
+        # meaning_S = self.round_meaning_A if speaker == "A" else self.round_meaning_B
+        # speaker = self.turns_history[-1].speaker.as_df
+        # utt_dist = speaker.loc[meaning_S,:].squeeze()
+        # new_utt = utt_dist[utt_dist == utt_dist.max()].index[0]
+        # return new_utt
+        return speaker
 
     def get_category_distribution(self):
-        if not self.turns_history:
-            raise ValueError("No turns have been run yet.")
-        listener = self.turns_history[-1].listener.as_df
-        meaning_L = self.round_meaning_B if self.past_utterances[-1]["speaker"] == "A" else self.round_meaning_A
-        return listener.loc[(self.past_utterances[-1]["utterance"], meaning_L),:].values.reshape(-1)
+        return np.ones(len(self.categories), dtype=float) / len(self.categories)
 
     def reset(self, meaning_A, meaning_B):
         self.round_meaning_A = meaning_A
@@ -252,19 +179,17 @@ class LLMRSA:
         meanings_L = self.meanings_B if speaker == "A" else self.meanings_A
         prior = self.prior.copy() if speaker == "A" else self.prior.copy().transpose(1, 0, 2)
         lexicon = np.exp(log_lexicon) / np.sum(np.exp(log_lexicon))
-        costs = costs if costs is not None else np.zeros(len(utterances), dtype=float)
 
-        model = RSATurn(
+        model = LiteralTurn(
             meanings_S=meanings_S,
             meanings_L=meanings_L,
             categories=self.categories,
             utterances=utterances,
             prior=prior,
-            lexicon=lexicon,
+            lexicon_S=lexicon,
+            lexicon_L=lexicon,
             alpha=self.alpha,
-            costs=costs,
-            max_depth=self.max_depth,
-            tolerance=self.tolerance
+            costs=costs if costs is not None else np.zeros(len(utterances), dtype=float),
         )
         model.run()
         self.turns_history.append(model)
@@ -276,10 +201,5 @@ class LLMRSA:
 
         # get speaker distribution
         self.past_utterances.append({"utterance": ground_truth_utt, "speaker": speaker})
-        self.past_speaker_dist.append(self.turns_history[-1].speaker.as_df.loc[meaning_S,:].values.reshape(-1))
-
-        
-
-
-    
-        
+        # self.past_speaker_dist.append(self.turns_history[-1].speaker.as_df.loc[meaning_S,:].values.reshape(-1))
+        self.past_speaker_dist.append(np.ones(len(utterances), dtype=float) / len(utterances))

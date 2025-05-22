@@ -5,3 +5,5 @@
 /data/
 /checkpoints/
 slurm*.out
+/code/
+/code.zip

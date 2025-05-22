@@ -4,13 +4,16 @@ import matplotlib.pyplot as plt
 
 def compute_metric(probs, target, metric, prior=None, prior_target=None):
     if metric == "accuracy":
-        return (probs.argmax(axis=1) == target).mean()
+        r = (probs.argmax(axis=1) == target)
+        return r.mean(), r.std()
     elif metric == "cross_entropy":
-        return -np.log(probs[np.arange(len(target)),target]).mean()
+        r = -np.log(probs[np.arange(len(target)),target])
+        return r.mean(), r.std()
     elif metric == "igain":
-        ce_prior = compute_metric(prior, prior_target, "cross_entropy")
-        ce_model = compute_metric(probs, target, "cross_entropy")
-        return ce_prior - ce_model
+        ce_prior = -np.log(prior[np.arange(len(target)),prior_target])
+        ce_model = -np.log(probs[np.arange(len(target)),target])
+        r = ce_prior - ce_model
+        return r.mean(), r.std()
     else:
         raise ValueError(f"Metric {metric} not supported")
 

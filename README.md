@@ -11,17 +11,10 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
+## Scripts:
 
-# Scripts:
-- rsa_hyperparams.py: Run RSA on single world for different alphas and show evolution metrics (gain, cooperation, etc.) and performance of the model compared to baselines.
-- rsa_dataset.py: Run RSA on real dataset and compare performance with baselines.
-- yrsa_hyperparams.py and yrsa_dataset.py: Repeat for Y-RSA
-- collaborative_models_hyperparms.py: Run CRSA and Mutiple Y-RSA and PIP on single world for different alphas and show:
-    - evolution metrics (gain, cooperation, etc.) for each round
-    - final metric (gain, cooperation, etc.) vs rounds 
-    - performance of the model compared to:
-        - dummy (priors)
-        - yrsa using last utterance
-        - multi y-rsa
-- collaborative_models_dataset.py: Run CSRA, Multiple Y-RSA and PIP for best parameters on real dataset.
+To run any of the following scripts run the following command: `python -m crsa.scripts.<script_name> --arg1 arg1 --arg2 arg2...`
+
+- `naive_reference_game`: Produce the output for the "find A1" reference game along with the plots of the paper.
+- `run_mddial`: Run Llama3.2-1B-Instruct on the MDDial, produce the literal speaker values for this dataset and outputs the table of the paper. Be sure of having the correct hardware on your machine to run the model. Hardware used in our case was NVIDIA Tesla V100 with 32 GiB of RAM.
 

@@ -18,13 +18,13 @@ from ..src.utils import init_logger
 
 
 model2config = {
-    "crsa_wm": {"label": "CRSA $\mathcal{L}(u,m_S,w)$", "color": "tab:blue", "linestyle": "--"},
-    "crsa": {"label": "CRSA $\mathcal{L}(u,m_S)$", "color": "tab:blue", "linestyle": "-"},
-    "rsa_wm": {"label": "RSA $\mathcal{L}(u,m_S,w)$", "color": "tab:orange", "linestyle": "--"},
-    "rsa": {"label": "RSA $\mathcal{L}(u,m_S)$", "color": "tab:orange", "linestyle": "-"},
-    "literal_wm": {"label": "Literal $\mathcal{L}(u,m_S,w)$", "color": "tab:green", "linestyle": "--"},
-    "literal": {"label": "Literal $\mathcal{L}(u,m_S)$", "color": "tab:green", "linestyle": "-"},
-    "prior": {"label": "Prior $P(y|m_L)$", "color": "tab:red", "linestyle": "-"},
+    "crsa_wm": {"label": "CRSA-$W_t$", "color": "tab:blue", "linestyle": ":"},
+    "crsa": {"label": "CRSA", "color": "tab:blue", "linestyle": "-"},
+    "rsa_wm": {"label": "YRSA-$W_t$", "color": "tab:orange", "linestyle": ":"},
+    "rsa": {"label": "YRSA", "color": "tab:orange", "linestyle": "-"},
+    "literal_wm": {"label": "Literal-$W_t$", "color": "tab:green", "linestyle": ":"},
+    "literal": {"label": "Literal", "color": "tab:green", "linestyle": "-"},
+    "prior": {"label": "Prior", "color": "tab:red", "linestyle": "-"},
 }
 
 
@@ -95,11 +95,11 @@ def init_model(model_name: str, world: dict, alpha: float = 1.0, max_depth: int 
     return model
 
 
-def plot_turns(df, models, output_dir):
+def plot_turns(df, models, output_dir, plot_error_bars=False):
 
     metrics = [
         ("accuracy", "Accuracy of the listener"),
-        ("igain", "Information Gain: $H_L(Y|U,M_L,W) - H_P(Y|M_L)$"),
+        ("igain", "Information Gain: $H_P(Y|M_{L_t})-H_L(Y|U_t,M_{L_t},W_t)$"),
     ]
 
     turns = df["turn"].unique()
@@ -113,8 +113,9 @@ def plot_turns(df, models, output_dir):
             target = df.loc[(df["turn"] == turn) & (df["model"] == model), "category_idx"].values
             metrics_results = {}
             for metric, _ in metrics:
-                r = compute_metric(probs, target, metric, prior=prior_probs, prior_target=prior_targets)
-                metrics_results[metric] = r
+                mean, std = compute_metric(probs, target, metric, prior=prior_probs, prior_target=prior_targets)
+                metrics_results[f"{metric}:mean"] = mean
+                metrics_results[f"{metric}:std"] = std
             results.append({
                 "model": model,
                 "turn": turn,
@@ -128,15 +129,26 @@ def plot_turns(df, models, output_dir):
     for i, (metric, metric_name) in enumerate(metrics):
         for model in models:
             model_df = results[results["model"] == model].sort_values("turn")
-            ax[i].plot(model_df["turn"], model_df[metric], label=model2config[model]["label"], linestyle=model2config[model]["linestyle"], linewidth=3, color=model2config[model]["color"])
+            ax[i].plot(model_df["turn"], model_df[f"{metric}:mean"], label=model2config[model]["label"], linestyle=model2config[model]["linestyle"], linewidth=3, color=model2config[model]["color"], marker="o", markersize=8)
+            if plot_error_bars:
+                if metric == "accuracy":
+                    yerr_top = np.clip(model_df[f"{metric}:mean"] + model_df[f"{metric}:std"], 0, 1) - model_df[f"{metric}:mean"]
+                    yerr_bottom = np.clip(model_df[f"{metric}:mean"] - model_df[f"{metric}:std"], 0, 1) + model_df[f"{metric}:mean"]
+                else:
+                    yerr_top = model_df[f"{metric}:std"]
+                    yerr_bottom = model_df[f"{metric}:std"]
+                ax[i].errorbar(
+                    model_df["turn"], model_df[f"{metric}:mean"], yerr=[yerr_bottom, yerr_top],
+                    fmt="none", color=model2config[model]["color"], capsize=5, capthick=2, elinewidth=2, alpha=0.5,
+                )
         ax[i].set_title(metric_name, fontsize=14)
         ax[i].set_xlabel("Turn")
         ax[i].grid(True)
         ax[i].set_xticks(model_df["turn"].astype(int))
     ax[0].set_ylim(0, 1.05)
-    ax[-1].legend(loc="lower center", bbox_to_anchor=(0.5, -0.4), fontsize=12, ncol=2)
+    ax[-1].legend(loc="lower center", bbox_to_anchor=(0.5, -0.25), fontsize=12, ncol=4)
     # ax[0].legend(loc="upper left", fontsize=12, bbox_to_anchor=(1, 1))
-    fig.tight_layout(pad=3)
+    fig.tight_layout(pad=1)
     plt.savefig(output_dir / f"metrics_vs_turns.pdf", bbox_inches="tight", dpi=300)
     plt.close(fig)
 
@@ -169,7 +181,7 @@ def plot_belief_example(df, sample_id, meanings, output_dir):
     ax.set_xticks(turns.astype(int) - 0.5)
     ax.set_xticklabels(
         [f"Turn {turn}\n$S_{spk}$: {utt}" for turn, (spk,utt) in dialog.iterrows()], rotation=0, fontsize=8)
-    ax.set_title(f"Listener Belief\n$(m_A={round_meaning_A},m_B={round_meaning_B})$", fontsize=14)
+    ax.set_title(f"Speaker Belief\n$m_A={round_meaning_A},m_B={round_meaning_B}$", fontsize=14)
 
     fig.tight_layout()
     plt.savefig(output_dir / f"belief.pdf", bbox_inches="tight", dpi=300)
@@ -184,6 +196,7 @@ def main(
     tolerance: float = None,
     n_seeds: int = 1,
     seed: int = 0,
+    plot_error_bars: bool = False,
     output_dir: Path = Path("outputs"),
     logger: logging.Logger = None,
 ):
@@ -253,7 +266,7 @@ def main(
     all_results.to_pickle(output_dir / "all_results.pkl")
 
     # Plot results
-    plot_turns(all_results, models, output_dir)
+    plot_turns(all_results, models, output_dir, plot_error_bars=plot_error_bars)
 
     sample_id = 0
     meanings = {
@@ -283,6 +296,7 @@ def parse_args():
     parser.add_argument("--tolerance", type=float, help="Tolerance to run CRSA with", default=None)
     parser.add_argument("--seed", type=int, help="Seed to run CRSA with", default=None)
     parser.add_argument("--n_seeds", type=int, help="Number of seeds to run each model", default=1)
+    parser.add_argument("--plot_error_bars", action="store_true", help="Plot error bars in the plots")
     args = parser.parse_args()
 
     # Create output directory
@@ -302,6 +316,7 @@ def parse_args():
         "seed": args.seed,
         "n_seeds": args.n_seeds,
         "output_dir": output_dir,
+        "plot_error_bars": args.plot_error_bars,
         "logger": logger,
     }
 

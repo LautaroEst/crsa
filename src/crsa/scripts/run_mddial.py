@@ -4,13 +4,17 @@ import logging
 from pathlib import Path
 import pickle
 import os
+from typing import List
 
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+from scipy.special import log_softmax, softmax
 
-from ..src.llm_models import LLM
+from ..src.llm_models import LLM, LLMCRSA, LLMRSA, LLMLiteral
 from ..src.datasets import MDDialDataset
 from ..src.utils import init_logger
+from ..src.evaluate import compute_metric
 
 
 model2config = {
@@ -25,16 +29,12 @@ model2config = {
 
 
 
-def main(
+def run_llm(
     base_model: str = "meta-llama/Llama-3.2-1B-Instruct",
-    seed: int = 0,
     save_every: int = 100,
     output_dir: Path = Path("outputs"),
     logger: logging.Logger = None,
 ):
-    
-    # Set random seed for reproducibility
-    np.random.seed(seed)
 
     if (output_dir / "lexicon_data.pkl").exists() and (output_dir / "categories_data.pkl").exists():
         logger.info("Model already run, skipping...")
@@ -46,7 +46,7 @@ def main(
     model.distribute(accelerator="auto", precision="bf16-true")
 
     # Init dataset
-    dataset = MDDialDataset(prompt_style=model.prompt_style)
+    dataset = MDDialDataset(prompt_style=model.prompt_style, split="train")
     world = dataset.world
 
     if (output_dir / "lexicon_data_part.pkl").exists() and (output_dir / "categories_data_part.pkl").exists():
@@ -114,11 +114,205 @@ def main(
     os.remove(output_dir / "categories_data_part.pkl")
     logger.info("Finished running model")
 
+
+def check_iter_args(alpha, max_depth, tolerance):
+    if max_depth is None and tolerance is None:
+        raise ValueError("Either max_depth or tolerance must be provided.")
+    if max_depth is None and tolerance is not None:
+        max_depth = float("inf")
+    if max_depth is not None and tolerance is None:
+        tolerance = 0.
+    return alpha, max_depth, tolerance
+
+
+def init_model(model_name, meanings_A, meanings_B, categories, prior, alpha, max_depth, tolerance):
+    if model_name == "crsa":
+        model = LLMCRSA(
+            meanings_A=meanings_A,
+            meanings_B=meanings_B,
+            categories=categories,
+            prior=prior,
+            alpha=alpha,
+            max_depth=max_depth,
+            tolerance=tolerance,
+        )
+    elif model_name == "rsa":
+        model = LLMRSA(
+            meanings_A=meanings_A,
+            meanings_B=meanings_B,
+            categories=categories,
+            prior=prior,
+            alpha=alpha,
+            max_depth=max_depth,
+            tolerance=tolerance,
+        )
+    elif model_name == "literal":
+        model = LLMLiteral(
+            meanings_A=meanings_A,
+            meanings_B=meanings_B,
+            categories=categories,
+            prior=prior,
+            alpha=alpha,
+        )
+    else:
+        raise ValueError(f"Unknown model name: {model_name}")
+    return model
+
+
+def run_rsa(models, alpha, max_depth, tolerance, output_dir: Path, logger: logging.Logger = None):
+   
+   # Init dataset
+    dataset = MDDialDataset(prompt_style=None, split="train")
+    world = dataset.world
+
+    # Load the data
+    with open(output_dir / "lexicon_data_part.pkl", "rb") as f:
+        df_lex = pd.DataFrame(pickle.load(f)).set_index(["sample_id", "turn"]).sort_index()
+    with open(output_dir / "categories_data_part.pkl", "rb") as f:
+        df_cat = pd.DataFrame(pickle.load(f)).set_index(["sample_id"]).sort_index()
+   
+    results = []
+    alpha, max_depth, tolerance = check_iter_args(alpha, max_depth, tolerance)
+    for model_name in models:
+        model = init_model(
+            model_name,
+            meanings_A=world["symptoms"],
+            meanings_B=["You are a doctor"],
+            categories=world["diseases"],
+            prior=world["prior"],
+            alpha=alpha, 
+            max_depth=max_depth, 
+            tolerance=tolerance,
+        )
+        logger.info(f"Running {model_name} with alpha={alpha}, max_depth={max_depth}, tolerance={tolerance}")
+        # Run the model for each sample
+        for i, sample in enumerate(dataset.iter_samples()):
+            if sample["dialog_id"] not in df_lex.index.get_level_values(0):
+                continue
+            model.reset(sample["symptoms_id"], "You are a doctor")
+            for (_, turn), (utt, speaker, log_lexicon) in df_lex.loc[(sample["dialog_id"], slice(None)), :].iterrows():
+                utterances = world[f"{speaker}_utterances"]
+                model.run_turn(utt, log_lexicon=log_lexicon, utterances=utterances, speaker="A" if speaker == "patient" else "B")
+                results.append({
+                    "model_name": model_name,
+                    "alpha": alpha,
+                    "sample_id": sample["dialog_id"],
+                    "meaning_A": sample["symptoms_id"],
+                    "meaning_B": "You are a doctor",
+                    "turn": turn,
+                    "sampled_utt": model.sample_utterance("A" if speaker == "patient" else "B"),
+                    "true_utt": utt,
+                    "true_utt_idx": utterances.index(utt),
+                    "speaker": speaker,
+                    "speaker_dist": model.past_speaker_dist[-1],
+                    "lexicon_dist": model.past_lexicon_dist[-1],
+                    "category_idx": world["diseases"].index(df_cat.loc[sample["dialog_id"], "disease"]),
+                    "category_distribution": df_cat.loc[sample["dialog_id"], "category_dist"],
+                    "listener_dist": model.get_category_distribution(),
+                    "belief_A": model.belief_A if model_name == "crsa" else None,
+                    "belief_B": model.belief_B if model_name == "crsa" else None,
+                })
+    
+    # Concatenate all results
+    all_results = pd.DataFrame(results)
+    all_results.to_pickle(output_dir / "all_results.pkl")
+    return all_results
+
+
+def compute_results(results, models, alpha, output_dir: Path):
+
+    results_ce = []
+    for model_name in models:
+        speaker_logprobs = []
+        lexicon_logprobs = []
+        category_logprobs = []
+        lexicon_cat_logprobs = []
+        dialogs = results[(results["alpha"] == alpha) & (results["model_name"] == model_name)].sort_values(["sample_id","turn"])
+        for dialog_id, dialog in dialogs.groupby("sample_id"):
+            # speaker_logprobs = []
+            # lexicon_logprobs = []
+            for i, row in dialog.iterrows():
+                speaker_logprobs.append(-np.log(row["speaker_dist"][row["true_utt_idx"]]))
+                lexicon_logprobs.append(-np.log(row["lexicon_dist"])[row["true_utt_idx"]])
+                category_logprobs.append(-np.log(row["listener_dist"])[row["category_idx"]])
+                lexicon_cat_logprobs.append(-log_softmax(row["category_distribution"])[row["category_idx"]])
+            # ax.plot(dialog["turn"], speaker_logprobs, color=f"C{i}", alpha=0.1)
+            # ax.plot(dialog["turn"], lexicon_logprobs, color=f"C{i}", alpha=0.1)
+            # cat_dists.append(dialog.iloc[-1]["category_distribution"])
+            # category_logprobs.append(-log_softmax(dialog.iloc[-1]["category_distribution"])[dialog.iloc[-1]["category_idx"]])
+            # speaker_logprobs.append(-np.log(dialog.iloc[-1]["speaker_dist"][dialog.iloc[-1]["true_utt_idx"]]))
+            # lexicon_logprobs.append(-log_softmax(np.log(dialog.iloc[-1]["lexicon_dist"]))[dialog.iloc[-1]["true_utt_idx"]])
+        
+        ce_speaker = np.mean(speaker_logprobs)
+        std_speaker = np.std(speaker_logprobs)
+        ce_lexicon = np.mean(lexicon_logprobs)
+        std_lexicon = np.std(lexicon_logprobs)
+        ce_category = np.mean(category_logprobs)
+        std_category = np.std(category_logprobs)
+        ce_lexicon_cat = np.mean(lexicon_cat_logprobs)
+        std_lexicon_cat = np.std(lexicon_cat_logprobs)
+
+        results_ce.append({
+            "model_name": model_name,
+            "$H_S$": f"{ce_speaker:.02f} +- {std_speaker:.02f}",
+            "$H_L$": f"{ce_category:.02f} +- {std_category:.02f}",
+        })               
+        # print(f"Model: {model_name}, Alpha: {alpha}, CE Speaker: {ce_speaker:.03} +- {std_speaker:0.03}, CE Lexicon: {ce_lexicon} +- {std_lexicon:0.03}, CE Category: {ce_category:.03} +- {std_category:0.03}, CE Lexicon Cat: {ce_lexicon_cat:.03} +- {std_lexicon_cat:0.03}")
+    results_ce.append({
+        "model_name": "Literal",
+        "$H_S$": f"{ce_lexicon:.02f} +- {std_lexicon:.02f}",
+        "$H_L$": f"{ce_lexicon_cat:.02f} +- {std_lexicon_cat:.02f}",
+    })
+    results_ce = pd.DataFrame(results_ce)
+    results_ce = results_ce.set_index("model_name")
+    results_ce.to_latex(output_dir / f"results_ce_{alpha}.tex", index=True, float_format="%.2f")
+
+
+
+
+
+def main(
+    base_model: str = "meta-llama/Llama-3.2-1B-Instruct",
+    models: List = ["crsa", "rsa", "literal"],
+    seed: int = None,
+    save_every: int = 100,
+    alpha: float = 1.0,
+    max_depth: int = float("inf"),
+    tolerance: float = 0.01,
+    output_dir: Path = Path("outputs"),
+    logger: logging.Logger = None,
+):
+    
+    # Set random seed for reproducibility
+    np.random.seed(seed)
+
+    # run_llm(base_model, save_every, output_dir, logger)
+
+    results = run_rsa(models, alpha=alpha, max_depth=max_depth, tolerance=tolerance, output_dir=output_dir, logger=logger)
+    
+    compute_results(results, models, alpha, output_dir)
+    # plot_turns(results, models, output_dir)
+    
+
+
 def parse_args():
+
+    def int_or_inf(value):
+        if value.lower() == "inf":
+            return float("inf")
+        try:
+            return int(value)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"Invalid value: {value}. Must be a integer or 'inf'.")
+
 
     # Parse arguments
     parser = argparse.ArgumentParser(description="Run models for a given configuration file")
     parser.add_argument("--base_model", type=str, help="LLM base model to run", default="meta-llama/Llama-3.2-1B-Instruct")
+    parser.add_argument("--models", type=str, nargs="+", help="Models to run", default=["crsa", "rsa", "literal"])
+    parser.add_argument("--alpha", type=float, help="Alpha to run", default=1.0)
+    parser.add_argument("--max_depth", type=int_or_inf, help="Max depth to run CRSA with", default=None)
+    parser.add_argument("--tolerance", type=float, help="Tolerance to run", default=0.01)
     parser.add_argument("--save_every", type=int, help="Save every N samples", default=100)
     parser.add_argument("--seed", type=int, help="Seed to run", default=None)
     args = parser.parse_args()
@@ -133,7 +327,11 @@ def parse_args():
     # Update configuration
     main_args = {
         "base_model": args.base_model,
+        "models": args.models,
         "save_every": args.save_every,
+        "alpha": args.alpha,
+        "max_depth": args.max_depth,
+        "tolerance": args.tolerance,
         "seed": args.seed,
         "output_dir": output_dir,
         "logger": logger,
