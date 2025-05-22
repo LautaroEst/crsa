@@ -78,7 +78,7 @@ class MDDialDataset:
         world["patient_utterances"] = patient_utterances
         world["doctor_utterances"] = doctor_utterances
 
-        shots_ids = [5, 43, 1204, 864]
+        shots_ids = [43, 1204]
         shots = []
         for i in shots_ids:
             record = deepcopy(valid_data[i])
