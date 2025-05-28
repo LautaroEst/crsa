@@ -1,190 +1,186 @@
 
-import pandas as pd
-import numpy as np
-from scipy.special import softmax
+import torch
 
-from .utils import ZERO, INF
+from .utils import sample_utterance
 
 
 class Listener:
 
-    def __init__(self, meanings, utterances, categories, prior, lexicon):
-        self.meanings = meanings
-        self.utterances = utterances
-        self.categories = categories
-        self.prior = prior
-        self.lexicon = lexicon
+    def __init__(self, logprior):
+        self.logprior = logprior
         self.history = []
+
+    def init(self, lit_logspk):
+        lit_loglst = self._update(lit_logspk)
+        self.history = [lit_loglst]
 
     def update(self, speaker):
-        speaker_arr = speaker.as_array.copy()
-        speaker_arr[speaker_arr <= ZERO] = ZERO
 
-        # lexicon(u,a), prior(a,b,y)
-        pragmatic_listener = np.einsum('au,aby->uby', speaker_arr, self.prior)
+        if not self.history:
+            raise ValueError("Listener has not been initialized. Call init() first.")
 
-        pragmatic_listener[pragmatic_listener <= ZERO] = ZERO
-        norm_term = pragmatic_listener.sum(axis=-1, keepdims=True)
-        norm_term[norm_term <= ZERO] = ZERO
-        pragmatic_listener = pragmatic_listener / norm_term
-        self.history.append(pragmatic_listener)
+        logspk = speaker.as_tensor.clone()
+        prag_lst = self._update(logspk)
+        self.history.append(prag_lst)
 
-    def compute_literal(self):
-        literal_listener = np.einsum('ua,aby->uby', self.lexicon, self.prior)
-        literal_listener[literal_listener <= ZERO] = ZERO
-        norm_term = literal_listener.sum(axis=-1, keepdims=True)
-        norm_term[norm_term <= ZERO] = ZERO
-        literal_listener = literal_listener / norm_term
-        self.history.append(literal_listener)
+    def _update(self, logspk):
+        pre_softmax = torch.logsumexp(self.logprior.unsqueeze(0) + logspk.T.unsqueeze(2).unsqueeze(2), dim=1)
+        prag_loglst = torch.log_softmax(pre_softmax, dim=2)
+        return prag_loglst
 
     @property
-    def as_array(self):
+    def literal_as_tensor(self):
+        return self.history[0]
+    
+    @property
+    def as_tensor(self):
         return self.history[-1]
     
-    @property
-    def as_df(self):
-        return pd.DataFrame(
-            self.history[-1].reshape(-1, len(self.categories)),
-            index=pd.MultiIndex.from_product([self.utterances, self.meanings], names=["utterance", "meaning"]), 
-            columns=self.categories
-        )
-    
+
 class Speaker:
 
-    def __init__(self, meanings, utterances, prior, lexicon, alpha, costs):
-        self.meanings = meanings
-        self.utterances = utterances
-        self.prior = prior
-        self.lexicon = lexicon
-        self.alpha = alpha
+    def __init__(self, logprior, costs=None, alpha=1.0):
+        self.logprior = logprior
         self.costs = costs
+        self.alpha = alpha
         self.history = []
 
+    def init(self, lit_logspk):
+        self.history = [lit_logspk.clone()]
+
+        # Compute conditional priors
+        logprior_sl = torch.logsumexp(self.logprior, dim=2, keepdim=True) # logP(s,l,:)
+        logprior_s = torch.logsumexp(logprior_sl, dim=1, keepdim=True) # P(s)
+        logprior_l_given_s = logprior_sl - logprior_s # P(l|s)
+        logprior_l_given_s[logprior_l_given_s.isnan()] = -torch.inf
+        logprior_yl_given_s = self.logprior - logprior_s # P(y,l|s)
+        logprior_yl_given_s[logprior_yl_given_s.isnan()] = -torch.inf
+        logprior_y_given_sl = self.logprior - logprior_sl # P(y|s,l)
+        logprior_y_given_sl[logprior_y_given_sl.isnan()] = -torch.inf
+
+        self.logprior_l_given_s = logprior_l_given_s
+        self.logprior_yl_given_s = logprior_yl_given_s
+        self.logprior_y_given_sl = logprior_y_given_sl
+
     def update(self, listener):
-        # Compute the conditional priors 
-        prior = self.prior.copy()
-        prior[prior <= ZERO] = ZERO
-        prior_ab = prior.sum(axis=2) # P(a,b)
-        prior_a = prior_ab.sum(axis=1, keepdims=True) # P(a)
-        prior_ab[prior_ab <= ZERO] = ZERO
-        prior_a[prior_a <= ZERO] = ZERO
-        prior_by_given_a = prior / prior_a # P(b,y|a)
 
-        # Compute the log_listener
-        listener_arr = listener.as_array.copy()
-        mask = listener_arr > 0
-        log_listener = np.zeros_like(listener_arr, dtype=float)
-        log_listener[mask] = np.log(listener_arr[mask])
-        log_listener[~mask] = -INF
+        if self.history is None:
+            raise ValueError("Speaker has not been initialized. Call init() before update().")
 
-        # Compute the pragmatic speaker
-        log_pragmatic_speaker = self.alpha * np.einsum('aby,uby->au', prior_by_given_a, log_listener) - self.costs.reshape(1,-1)
-        pragmatic_speaker = softmax(log_pragmatic_speaker, axis=1)
-        pragmatic_speaker[pragmatic_speaker <= ZERO] = ZERO
-        self.history.append(pragmatic_speaker)
+        # Compute the listener value: V_L = log(L(u,l,y)) - C(u)
+        v_l = listener.as_tensor - self.costs.view(-1, 1, 1)
 
-
-    def compute_literal(self):
-        # Compute the conditional priors 
-        prior = self.prior.copy()
-        prior[prior <= ZERO] = ZERO
-        prior_ab = prior.sum(axis=2) # P(a,b)
-        prior_a = prior_ab.sum(axis=1, keepdims=True) # P(a)
-        prior_ab[prior_ab <= ZERO] = ZERO
-        prior_a[prior_a <= ZERO] = ZERO
-        prior_b_given_a = prior_ab / prior_a # P(b|a)
-
-        mask = self.lexicon > 0
-        log_lexicon = np.zeros_like(self.lexicon, dtype=float)
-        log_lexicon[mask] = np.log(self.lexicon[mask])
-        log_lexicon[~mask] = -INF
-        literal_speaker = softmax(self.alpha * np.einsum("ub,ab->au",log_lexicon - self.costs.reshape(-1,1), prior_b_given_a), axis=1)
-        self.history.append(literal_speaker)        
+        pre_softmax = torch.exp(self.logprior_yl_given_s).unsqueeze(0) * v_l.unsqueeze(1)  # P(:,s,l,y) * V_L(u,:,l,y)
+        pre_softmax[pre_softmax.isnan()] = 0.0  # approx x * log(x) = 0
+        pre_softmax = pre_softmax.sum(dim=2).sum(dim=2).T
+        prag_logspk = torch.log_softmax(self.alpha * pre_softmax, dim=1)
+        prag_logspk[prag_logspk.isnan()] = -torch.inf 
+        self.history.append(prag_logspk)
         
     @property
-    def as_array(self):
-        return self.history[-1]
-    
-    @property
-    def as_df(self):
-        return pd.DataFrame(
-            self.history[-1], 
-            index=pd.Index(self.meanings, name="meaning"), 
-            columns=self.utterances
-        )
+    def as_tensor(self):
+        if self.history:
+            return self.history[-1]
     
 
-class RSAGain:
 
-    def __init__(self, prior, cost, alpha):
-        self.prior = prior
-        self.cost = cost
+class YRSAGain:
+
+    def __init__(self, logprior, costs, alpha):
+        self.logprior = logprior
+        self.costs = costs
         self.alpha = alpha
+
+    def init(self):
         self.cond_entropy_history = []
         self.listener_value_history = []
         self.gain_history = []
-        
+
     def _compute_cond_entropy(self, speaker):
-        prior = self.prior.copy().sum(axis=1).sum(axis=1)
-        prior[prior <= ZERO] = ZERO
-        speaker_arr = speaker.as_array.copy()
-        log_speaker_times_speaker = np.zeros_like(speaker_arr, dtype=float)
-        mask = speaker_arr > 0
-        log_speaker_times_speaker[mask] = speaker_arr[mask] * np.log(speaker_arr[mask])
-        log_speaker_times_speaker[~mask] = ZERO # approx 0 * log(0) = 0
-        return -np.einsum('a,au->', prior, log_speaker_times_speaker)
+        prag_logspk = speaker.as_tensor
+        logprior_s = torch.logsumexp(torch.logsumexp(self.logprior, dim=1), dim=1).unsqueeze(0)
+        logspk = prag_logspk.T
+        logps = logprior_s + logspk
+        ps = torch.exp(logps)
+        
+        cond_entropy_us = ps * logspk
+        cond_entropy_us[cond_entropy_us.isnan()] = 0.0
+        cond_entropy = -torch.sum(cond_entropy_us)
+        
+        return cond_entropy
     
-    def _compute_listener_value(self, speaker, listener):
-        prior = self.prior.copy()
-        prior[prior <= ZERO] = ZERO
-        speaker_arr = speaker.as_array.copy()
-        listener_arr = listener.as_array.copy()
-        log_listener = np.zeros_like(listener_arr, dtype=float)
-        mask = listener_arr > 0
-        log_listener[mask] = np.log(listener_arr[mask])
-        log_listener[~mask] = -INF
-        return np.einsum('aby,au,uby->', prior, speaker_arr, log_listener)
+    def _listener_value(self, listener, speaker):
+        prag_logspk = speaker.as_tensor
+        logprior = self.logprior.unsqueeze(0)
+        logspk = prag_logspk.T.unsqueeze(2).unsqueeze(2)
+        logps = logprior + logspk
+        ps = torch.exp(logps)
+
+        v_l = listener.as_tensor - self.costs.view(-1, 1, 1) # V_L(u,l,y)
+        v_l = v_l.unsqueeze(1)
+
+        v_l_usly = ps * v_l
+        v_l_usly[v_l_usly.isnan()] = 0.0
+        expected_v_l = torch.sum(v_l_usly)
+        return expected_v_l
 
     def compute_gain(self, listener, speaker):
-        if speaker.as_array is None:
-            return np.nan
-        cond_ent = self._compute_cond_entropy(speaker)
-        self.cond_entropy_history.append(cond_ent)
-        listener_value = self._compute_listener_value(speaker, listener)
-        self.listener_value_history.append(listener_value)
-        gain = cond_ent + self.alpha * listener_value
+        if self.cond_entropy_history is None:
+            raise ValueError("Gain has not been initialized. Call init() before compute_gain().")
+
+        # H_S(U|Ms,W)
+        cond_entropy = self._compute_cond_entropy(speaker)
+        self.cond_entropy_history.append(cond_entropy)
+
+        # E[V_L]
+        expected_v_l = self._listener_value(listener, speaker)
+        self.listener_value_history.append(expected_v_l)
+
+        # Gain = H_S(U|Ms,W) + alpha * E[V_L]
+        gain = cond_entropy + self.alpha * expected_v_l
         self.gain_history.append(gain)
         return gain
     
     def get_diff(self):
         if len(self.gain_history) < 2:
             return float("inf")
-        return abs(self.gain_history[-1] - self.gain_history[-2]) / abs(self.gain_history[-2])
+        return self.gain_history[-1] - self.gain_history[-2] / abs(self.gain_history[-2])
 
 
-class RSATurn:
 
-    def __init__(self, meanings_S, meanings_L, categories, utterances, lexicon, prior, alpha=1.0, costs=None, max_depth=100, tolerance=1e-5):
-        self.meanings_S = meanings_S
-        self.meanings_L = meanings_L
-        self.categories = categories
-        self.utterances = utterances
-        self.lexicon = lexicon
-        self.prior = prior
+class YRSATurn:
+    
+    def __init__(
+        self,
+        spk_name,
+        logprior,
+        costs,
+        alpha,
+        max_depth,
+        tolerance,
+    ):
+        self.spk_name = spk_name
+        self.costs = costs
+        self.logprior = logprior
         self.alpha = alpha
-        self.costs = costs if costs is not None else np.zeros(len(utterances))
         self.max_depth = max_depth
         self.tolerance = tolerance
 
-        self.speaker = Speaker(meanings_S, utterances, prior, None, alpha, costs)
-        self.listener = Listener(meanings_L, utterances, categories, prior, lexicon)
-        self.listener.compute_literal()
-        self.gain = RSAGain(prior, costs, alpha)
+        self.listener = Listener(logprior)
+        self.speaker = Speaker(logprior, self.costs, self.alpha)
+        self.gain = YRSAGain(logprior, self.costs, self.alpha)
 
-    def run(self):
+    def run(self, lit_logspk):
+
+        # Init agents
+        self.listener.init(lit_logspk)
+        self.speaker.init(lit_logspk)
+        self.gain.init()
+
         # Run the model for the given number of iterations
         i = 0
         while i < self.max_depth:
+
             # First update the speaker then the listener
             self.speaker.update(self.listener)
             self.listener.update(self.speaker)
@@ -199,87 +195,36 @@ class RSATurn:
 
 class YRSA:
 
-    def __init__(self, meanings_A, meanings_B, categories, prior, alpha=1.0, max_depth=100, tolerance=1e-5):
-        self.round_meaning_A = None
-        self.meanings_A = meanings_A
-        self.round_meaning_B = None
-        self.meanings_B = meanings_B
-        self.categories = categories
-        self.prior = prior # P(a,b,y)
-        self.alpha = alpha
-        self.max_depth = max_depth
-        self.tolerance = tolerance
-        self.past_utterances = []
-        self.speaker_now = None
-        self.turns_history = []
-        self.past_speaker_dist = []
-        self.past_lexicon_dist = []
+    def __init__(self, logprior):
+        self.logprior = logprior
 
-    def reset(self, meaning_A, meaning_B):
-        self.round_meaning_A = meaning_A
-        self.round_meaning_B = meaning_B
-        self.past_utterances = []
-        self.turns_history = []
-        self.past_speaker_dist = []
-        self.past_lexicon_dist = []
+    def reset(self):
+        self.turns = []
 
-    def sample_utterance(self, speaker):
-        meaning_S = self.round_meaning_A if speaker == "A" else self.round_meaning_B
-        speaker = self.turns_history[-1].speaker.as_df
-        utt_dist = speaker.loc[meaning_S,:].squeeze()
-        new_utt = utt_dist[utt_dist == utt_dist.max()].index[0]
-        return new_utt
+    def sample_utterance(self, meaning_S, sampling_strategy):
+        # Get pragmatic speaker of the last turn
+        prag_logspk = self.turns[-1].speaker.as_tensor
 
-    def get_category_distribution(self):
-        if not self.turns_history:
-            raise ValueError("No turns have been run yet.")
-        listener = self.turns_history[-1].listener.as_df
-        meaning_L = self.round_meaning_B if self.past_utterances[-1]["speaker"] == "A" else self.round_meaning_A
-        return listener.loc[(self.past_utterances[-1]["utterance"], meaning_L),:].values.reshape(-1)
+        # Sample an utterance from the pragmatic speaker
+        utt_idx = sample_utterance(prag_logspk, meaning_S, sampling_strategy)
 
-    def reset(self, meaning_A, meaning_B):
-        self.round_meaning_A = meaning_A
-        self.round_meaning_B = meaning_B
-        self.past_utterances = []
-        self.turns_history = []
-        self.past_speaker_dist = []
-        self.past_lexicon_dist = []
-
-    def run_turn(self, ground_truth_utt, log_lexicon, utterances, costs=None, speaker="A"):
-        if self.round_meaning_A is None or self.round_meaning_B is None:
-            raise ValueError("Please set the round meanings before running the model by calling the reset method.")
-        meanings_S = self.meanings_A if speaker == "A" else self.meanings_B
-        meanings_L = self.meanings_B if speaker == "A" else self.meanings_A
-        prior = self.prior.copy() if speaker == "A" else self.prior.copy().transpose(1, 0, 2)
-        lexicon = np.exp(log_lexicon) / np.sum(np.exp(log_lexicon))
-        costs = costs if costs is not None else np.zeros(len(utterances), dtype=float)
-
-        model = RSATurn(
-            meanings_S=meanings_S,
-            meanings_L=meanings_L,
-            categories=self.categories,
-            utterances=utterances,
-            prior=prior,
-            lexicon=lexicon,
-            alpha=self.alpha,
-            costs=costs,
-            max_depth=self.max_depth,
-            tolerance=self.tolerance
-        )
-        model.run()
-        self.turns_history.append(model)
-
-        # get lexicon distribution
-        meaning_S = self.round_meaning_A if speaker == "A" else self.round_meaning_B
-        meaning_S_idx = meanings_S.index(meaning_S)
-        self.past_lexicon_dist.append(lexicon[:, meaning_S_idx].copy())
-
-        # get speaker distribution
-        self.past_utterances.append({"utterance": ground_truth_utt, "speaker": speaker})
-        self.past_speaker_dist.append(self.turns_history[-1].speaker.as_df.loc[meaning_S,:].values.reshape(-1))
-
-        
-
-
+        return utt_idx
     
+    def run_turn(self, lit_logspk, spk_name, costs, alpha=1.0, max_depth=float('inf'), tolerance=1e-3):
+
+        logprior = self.logprior.clone() if spk_name == "A" else self.logprior.clone().transpose(0, 1)
+
+        model = YRSATurn(
+            spk_name=spk_name,
+            logprior=logprior,
+            costs=costs,
+            alpha=alpha,
+            max_depth=max_depth,
+            tolerance=tolerance,
+        )
+        model.run(lit_logspk)
+        self.turns.append(model)
+
+        return model.speaker.as_tensor, model.listener.as_tensor
+
         

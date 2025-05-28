@@ -1,2 +1,1 @@
-from .static import StaticSpeaker
-from .deductive import DeductiveSpeaker
+from .lexicon_based import StaticLexicon, DynamicLexicon

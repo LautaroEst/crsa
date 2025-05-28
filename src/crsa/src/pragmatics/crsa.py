@@ -1,13 +1,12 @@
 
 import torch
 
-from .utils import INF, ZERO
 from .utils import sample_utterance
 
 
 class Listener:
 
-    def __init__(self, logprior, logbelief_L=None):
+    def __init__(self, logprior, logbelief_L):
         self.logprior = logprior
         self.logbelief_L = logbelief_L
         self.history = []
@@ -279,6 +278,6 @@ class CRSA:
         model.run(lit_logspk)
         self.turns.append(model)
 
-        return torch.exp(model.speaker.as_tensor), torch.exp(model.listener.as_tensor)
+        return model.speaker.as_tensor, model.listener.as_tensor
 
         

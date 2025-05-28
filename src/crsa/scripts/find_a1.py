@@ -12,7 +12,7 @@ import torch
 from ..src.io import init_logger, read_yaml
 from ..src.datasets import FindA1Dataset
 from ..src.pragmatics import init_model
-from ..src.speakers import StaticSpeaker, DeductiveSpeaker
+from ..src.speakers import StaticLexicon, DynamicLexicon
 
 
 def check_iter_args(max_depth, tolerance):
@@ -40,8 +40,8 @@ def check_iter_args(max_depth, tolerance):
 def plot_turns(df, models, output_dir):
     for model_name in models:
         model_results = df[df['model'] == model_name].copy()
-        model_results["nll"] = model_results.apply(lambda x: -np.log(x["prag_list"][x["utterance"], x[f"meaning_{'B' if x['speaker'] == 'A' else 'A'}"],x["target"]]), axis=1)
-        model_results["acc"] = model_results.apply(lambda x: float(x["prag_list"][x["utterance"], x[f"meaning_{'B' if x['speaker'] == 'A' else 'A'}"],:].argmax() == x["target"].item()), axis=1)
+        model_results["nll"] = model_results.apply(lambda x: -x["prag_loglst"][x["utterance"], x[f"meaning_{'B' if x['speaker'] == 'A' else 'A'}"],x["target"]], axis=1)
+        model_results["acc"] = model_results.apply(lambda x: float(x["prag_loglst"][x["utterance"], x[f"meaning_{'B' if x['speaker'] == 'A' else 'A'}"],:].argmax() == x["target"].item()), axis=1)
         print(model_results.groupby("turn").agg({"nll": "mean", "acc": "mean"}).reset_index())
         
 def main(
@@ -53,6 +53,7 @@ def main(
     tolerance: float = None,
     sampling_strategy: str = "greedy",
     seed: int = 0,
+    print_every_n_turns: int = 10,
     **kwargs
 ):
     
@@ -82,19 +83,16 @@ def main(
 
         # Init literal speaker
         if "_wm" in model_name:
-            speaker = DeductiveSpeaker.from_lexicon(
-                dataset.world["lexicon_A"], dataset.world["lexicon_B"]
-            )
+            speaker = DynamicLexicon.from_lexicon(dataset.world["lexicon_A"], dataset.world["lexicon_B"])
         else:
-            speaker = StaticSpeaker.from_lexicon(
-                dataset.world["lexicon_A"], dataset.world["lexicon_B"]
-            )
+            speaker = StaticLexicon.from_lexicon(dataset.world["lexicon_A"], dataset.world["lexicon_B"])
 
         # Init pragmatic model
         model = init_model(model_name.split("_")[0], dataset.world["logprior"])       
 
         # Generate pragmatic dialogs
         model_results = []
+        turns_count = 0
         for i, sample in enumerate(dataset.iter_samples()):
 
             # Get the meanings and target
@@ -108,13 +106,14 @@ def main(
             for turn, spk_name in zip(range(1, game_size + 1), cycle("AB")):
 
                 # Log the current turn
-                logger.info(f"Round {i+1}/{len(dataset)}, Turn {turn}, Speaker {spk_name}")
+                if turns_count % print_every_n_turns == 0:
+                    logger.info(f"Round {i+1}/{len(dataset)}, Turn {turn}, Speaker {spk_name}")
 
                 # Get the literal speaker
                 lit_logspk, costs = speaker(past_utterances, spk_name)
 
                 # Run the pragmatic model
-                prag_spk, prag_list = model.run_turn(lit_logspk, spk_name, costs, alpha, max_depth, tolerance)
+                prag_logspk, prag_loglst = model.run_turn(lit_logspk, spk_name, costs, alpha, max_depth, tolerance)
 
                 # Sample an utterance from the pragmatic speaker
                 meaning_S = meaning_A if spk_name == "A" else meaning_B
@@ -131,9 +130,13 @@ def main(
                     "meaning_A": meaning_A,
                     "meaning_B": meaning_B,
                     "target": target,
-                    "prag_spk": prag_spk,
-                    "prag_list": prag_list,
+                    "prag_logspk": prag_logspk,
+                    "prag_loglst": prag_loglst,
                 })
+
+                # Update turns count
+                turns_count += 1
+
         # Convert results to DataFrame
         model_results_df = pd.DataFrame(model_results)
         model_results_df.to_pickle(output_dir / f"{model_name}_results.pkl")
