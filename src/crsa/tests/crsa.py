@@ -1,40 +1,52 @@
 
 
 from itertools import cycle
-import numpy as np
+from lightning import seed_everything
+import torch
 
-from ..src.naive_models import NaiveCRSA
+from ..src.pragmatics import init_model
 from ..src.datasets import FindA1Dataset
+from ..src.speakers import StaticSpeaker
 
 
 def main():
-    np.random.seed(1234)
+
+    seed_everything(1234, verbose=False)
+
     game_size = 4
-    dataset = FindA1Dataset(game_size=game_size, n_samples=10)
+    dataset = FindA1Dataset(game_size=game_size, n_rounds=10)
     world = dataset.world
     
-    idx, meaning_A, meaning_B, utterances, cat = next(iter(dataset.iter_samples()))
-    
-    model = NaiveCRSA(
-        meanings_A=world["meanings_A"], 
-        meanings_B=world["meanings_B"], 
-        categories=world["categories"], 
-        utterances=world["utterances"], 
-        lexicon_A=world["lexicon_A"], 
-        lexicon_B=world["lexicon_B"], 
-        prior=world["prior"], 
-        costs=world["costs"], 
-        alpha=2.5, 
-        max_depth=float("inf"),
-        tolerance=1e-3,
+    model = init_model("crsa", logprior=world["logprior"])
+
+    speaker = StaticSpeaker.from_lexicon(
+        world["lexicon_A"], world["lexicon_B"]
     )
-    model.reset(meaning_A, meaning_B)
-    for turn, speaker in zip(range(1, game_size + 1), cycle("AB")):
-        model.run_turn(speaker)
-        cat_dist = model.get_category_distribution()
-        print(f"Turn {turn} - Speaker: {speaker}")
-        print(f"Category distribution: {cat_dist}")
-        print()
+
+    alpha = 2.5
+
+    for i, sample in enumerate(dataset.iter_samples()):
+
+        # Get the meanings and target
+        meaning_A = sample["meaning_A"]
+        meaning_B = sample["meaning_B"]
+        target = sample["target"]
+
+        # Generate dialog with the model
+        past_utterances = []
+        model.reset()
+        for turn, spk_name in enumerate(cycle("AB"), start=1):
+
+            # Get the literal speaker
+            lit_logspk, costs = speaker(past_utterances, spk_name)
+            
+            # Run the pragmatic model
+            prag_logspk, prag_loglist = model.run_turn(lit_logspk, spk_name, costs, alpha)
+
+            # Sample an utterance from the pragmatic speaker
+            meaning_S = meaning_A if spk_name == "A" else meaning_B
+            new_utt = model.sample_utterance(meaning_S, "greedy")
+            past_utterances.append({"spk_name": spk_name, "utterance": new_utt})
 
 
 if __name__ == "__main__":

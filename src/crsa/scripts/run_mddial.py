@@ -13,7 +13,7 @@ from scipy.special import log_softmax, softmax
 
 from ..src.llm_models import LLM, LLMCRSA, LLMRSA, LLMLiteral
 from ..src.datasets import MDDialDataset
-from ..src.utils import init_logger
+from ..src.io import init_logger
 from ..src.evaluate import compute_metric
 
 

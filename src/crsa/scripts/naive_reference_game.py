@@ -14,7 +14,7 @@ import seaborn as sns
 from ..src.naive_models import NaiveCRSA, NaiveRSA, NaiveLiteral, Prior
 from ..src.datasets import FindA1Dataset
 from ..src.evaluate import compute_metric
-from ..src.utils import init_logger
+from ..src.io import init_logger
 
 
 model2config = {

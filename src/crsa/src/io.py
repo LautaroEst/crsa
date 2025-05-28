@@ -3,6 +3,7 @@
 import logging
 from pathlib import Path
 import time
+import yaml
 
 
 def init_logger(name, output_dir: Path):
@@ -21,3 +22,9 @@ def init_logger(name, output_dir: Path):
     script_logger.addHandler(file_handler)
     script_logger.setLevel(logging.INFO)
     return script_logger
+
+
+def read_yaml(path: Path):
+    with open(path, "r") as f:
+        config = yaml.safe_load(f)
+    return config

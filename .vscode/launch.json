@@ -10,46 +10,15 @@
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
             "request": "launch",
-            "module": "crsa.scripts.parameters",
-            "args": [
-                "--world", "findA1_simple",
-                "--pasts", "1st 2nd",
-                "--alphas", "2.0",
-                "--max_depths", "10",
-                "-v"
-            ]
+            "module": "crsa.tests.crsa",
         },
         {
-            "name": "Debug: models",
+            "name": "Debug: CRSA 2",
             "type": "debugpy",
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
             "request": "launch",
-            "module": "crsa.scripts.run_findA1",
-            "args": [
-                "--n_possitions", "3",
-                "--models", "crsa", "memoryless_rsa", "memoryless_literal", "prior_model",
-                "--n_turns", "9",
-                "--alpha", "2.0",
-                "--tolerance", "1e-3",
-                "--seed", "1234",
-                "--n_seeds", "10"
-            ]
-        },
-        {
-            "name": "Debug: infojigsaw",
-            "type": "debugpy",
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "request": "launch",
-            "module": "crsa.scripts.run_infojigsaw",
-            "args": [
-                "--models", "crsa", "llmrsa_EleutherAI/pythia-14m",
-                "--alpha", "2.0",
-                "--metrics", "accuracy", "nll",
-                "--tolerance", "1e-3",
-                "--seed", "12345",
-            ]    
+            "module": "crsa.tests.crsa2",
         }
     ]
 }

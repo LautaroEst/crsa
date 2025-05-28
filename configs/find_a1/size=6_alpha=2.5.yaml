@@ -1,0 +1,16 @@
+game_size: 6
+n_rounds: 100
+
+models: 
+  - "crsa"
+  # - "crsa_wm" 
+  # - "rsa" 
+  # - "rsa_wm" 
+  # - "literal" 
+  # - "literal_wm" 
+  # - "prior"
+
+alpha: 2.5
+tolerance: 1e-3
+max_depth: inf
+seed: 7423
