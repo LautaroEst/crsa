@@ -33,7 +33,7 @@ class Speaker:
         self.history = []
 
     def init(self, lit_logspk):
-        self.history = [lit_logspk.clone()]
+        self.history = [torch.log_softmax(lit_logspk.clone(), dim=1)]
 
     @property
     def as_tensor(self):
@@ -78,7 +78,8 @@ class Literal:
         prag_logspk = self.turns[-1].speaker.as_tensor
 
         # Sample an utterance from the pragmatic speaker
-        utt_idx = sample_utterance(prag_logspk, meaning_S, sampling_strategy)
+        logits = prag_logspk[meaning_S, :]
+        utt_idx = sample_utterance(logits, sampling_strategy)
 
         return utt_idx
     

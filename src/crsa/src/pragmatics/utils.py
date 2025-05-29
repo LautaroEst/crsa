@@ -27,11 +27,10 @@ def sample_top_p(logits: torch.Tensor, top_p: float) -> torch.Tensor:
     return logits
 
 
-def sample_utterance(logspk: torch.Tensor, meaning_S: int, sampling_strategy: str) -> torch.Tensor:
+def sample_utterance(logits: torch.Tensor, sampling_strategy: str) -> torch.Tensor:
     top_k, top_p = parse_sampling_strategy(sampling_strategy)
     if top_p < 0.0 or top_p > 1.0:
         raise ValueError(f"top_p must be in [0, 1], got {top_p}")
-    logits = logspk[meaning_S, :]
     # optionally crop the logits to only the top k options
     if top_k is not None:
         v, i = torch.topk(logits, min(top_k, logits.size(-1)))

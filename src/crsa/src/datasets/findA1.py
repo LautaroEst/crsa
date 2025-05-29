@@ -13,6 +13,7 @@ class FindA1Dataset:
         self.game_size = game_size
         self.world = self._create_world()
         self.data = self._load_data()
+        self.sampled_indices = torch.randperm(self.n_rounds)
 
     def _load_data(self):
         data = []
@@ -78,8 +79,7 @@ class FindA1Dataset:
         return sampled_indices[0], sampled_indices[1], sampled_indices[2]
     
     def iter_samples(self):
-        indices = torch.randperm(self.n_rounds)
-        for idx in indices:
+        for idx in self.sampled_indices:
             yield self.data[idx]
 
     def __getitem__(self, idx):

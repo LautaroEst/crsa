@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import List, Literal, Union
 from lightning import seed_everything
 import matplotlib.pyplot as plt
+import seaborn as sns
 import numpy as np
 import pandas as pd
 import torch
@@ -13,6 +14,21 @@ from ..src.io import init_logger, read_yaml
 from ..src.datasets import FindA1Dataset
 from ..src.pragmatics import init_model
 from ..src.speakers import StaticLexicon, DynamicLexicon
+from ..src.evaluate import compute_metric
+
+
+
+model2config = {
+    "crsa_wm": {"label": "$L_1^{CRSA-WM}(y|u_t,w_t,m_{L_t})$", "color": "tab:blue", "linestyle": ":", "marker": "o"},
+    "crsa": {"label": "$L_1^{CRSA}(y|u_t,w_t,m_{L_t})$", "color": "tab:blue", "linestyle": "-", "marker": "o"},
+    "crsa-literal_wm": {"label": "$L_0^{CRSA-WM}(y|u_t,w_t,m_{L_t})$", "color": "tab:blue", "linestyle": ":", "marker": "x"},
+    "crsa-literal": {"label": "$L_0^{CRSA}(y|u_t,w_t,m_{L_t})$", "color": "tab:blue", "linestyle": "-", "marker": "x"},
+    "yrsa_wm": {"label": "$L_1^{YRSA-WM}(y|u_t,w_t,m_{L_t})$", "color": "tab:orange", "linestyle": ":", "marker": "o"},
+    "yrsa": {"label": "$L_1^{YRSA}(y|u_t,w_t,m_{L_t})$", "color": "tab:orange", "linestyle": "-", "marker": "o"},
+    "yrsa-literal_wm": {"label": "$L_0^{YRSA-WM}(y|u_t,w_t,m_{L_t})$", "color": "tab:orange", "linestyle": ":", "marker": "x"},
+    "yrsa-literal": {"label": "$L_0^{YRSA}(y|u_t,w_t,m_{L_t})$", "color": "tab:orange", "linestyle": "-", "marker": "x"},
+    "prior": {"label": "$P_t(y|m_{L_t})$", "color": "tab:green", "linestyle": "-", "marker": None},
+}
 
 
 def check_iter_args(max_depth, tolerance):
@@ -38,12 +54,96 @@ def check_iter_args(max_depth, tolerance):
 
 
 def plot_turns(df, models, output_dir):
-    for model_name in models:
-        model_results = df[df['model'] == model_name].copy()
-        model_results["nll"] = model_results.apply(lambda x: -x["prag_loglst"][x["utterance"], x[f"meaning_{'B' if x['speaker'] == 'A' else 'A'}"],x["target"]], axis=1)
-        model_results["acc"] = model_results.apply(lambda x: float(x["prag_loglst"][x["utterance"], x[f"meaning_{'B' if x['speaker'] == 'A' else 'A'}"],:].argmax() == x["target"].item()), axis=1)
-        print(model_results.groupby("turn").agg({"nll": "mean", "acc": "mean"}).reset_index())
-        
+
+    metrics = [
+        ("accuracy", "Accuracy of the listener"),
+        ("igain", "Information Gain: $H_P(Y|M_{L_t})-H_L(Y|U_t,M_{L_t},W_t)$"),
+    ]
+
+    def retrieve_cat_dist(x):
+        return x["prag_loglst"][x["utterance"], x[f"meaning_{'B' if x['speaker'] == 'A' else 'A'}"],:]
+
+    turns = df["turn"].unique()
+    df["category_distribution"] = df.apply(retrieve_cat_dist, axis=1)
+    df["target"] = df.apply(lambda x: int(x["target"].item()), axis=1)
+
+    results = []
+    for turn in turns:
+        prior_logprobs = torch.vstack(df.loc[(df["turn"] == turn) & (df["model"] == "prior"), "category_distribution"].to_list())
+        prior_targets = torch.from_numpy(df.loc[(df["turn"] == turn) & (df["model"] == "prior"), "target"].values)
+        for model in models:
+            iter_num = df.loc[(df["turn"] == turn) & (df["model"] == model), "iter_num"]
+            logprobs = torch.vstack(df.loc[(df["turn"] == turn) & (df["model"] == model), "category_distribution"].to_list())
+            target = torch.from_numpy(df.loc[(df["turn"] == turn) & (df["model"] == model), "target"].values)
+            metrics_results = {}
+            for metric, _ in metrics:
+                mean, std = compute_metric(logprobs, target, metric, prior_logprobs=prior_logprobs, prior_target=prior_targets)
+                metrics_results[f"{metric}:mean"] = mean
+                metrics_results[f"{metric}:std"] = std
+            results.append({
+                "model": model,
+                "turn": turn,
+                "iter_num:mean": iter_num.mean().item(),
+                "iter_num:std": iter_num.std().item(),
+                **metrics_results,
+            })
+    results = pd.DataFrame(results)
+    # print(results.set_index(["model", "turn"]))
+    # import pdb; pdb.set_trace()
+
+    fig, ax = plt.subplots(2, 1, figsize=(6, 12))
+    for i, (metric, metric_name) in enumerate(metrics):
+        for model in models:
+            model_df = results[results["model"] == model].sort_values("turn")
+            ax[i].plot(model_df["turn"], model_df[f"{metric}:mean"], label=model2config[model]["label"], linestyle=model2config[model]["linestyle"], linewidth=3, color=model2config[model]["color"], marker=model2config[model]["marker"], markersize=8)
+        ax[i].set_title(metric_name, fontsize=14)
+        ax[i].set_xlabel("Turn")
+        ax[i].grid(True)
+        ax[i].set_xticks(model_df["turn"].astype(int))
+    ax[0].set_ylim(0, 1.05)
+    ax[-1].legend(loc="lower center", bbox_to_anchor=(0.5, -0.25), fontsize=12, ncol=3)
+    # ax[0].legend(loc="upper left", fontsize=12, bbox_to_anchor=(1, 1))
+    fig.tight_layout(pad=1)
+    plt.savefig(output_dir / f"metrics_vs_turns.pdf", bbox_inches="tight", dpi=300)
+    plt.close(fig)
+
+
+
+def plot_belief_example(df, sample_id, meanings, utterances, output_dir):
+    sample = df.loc[(df["idx"] == sample_id) & (df["model"] == "crsa"), ["turn", "speaker", "logbelief_A", "logbelief_B"]].copy()
+    sample = sample.set_index("turn").sort_index()
+    turns = sample.index.to_numpy()
+    round_meaning_A = meanings["A"][df.loc[(df["idx"] == sample_id) & (df["model"] == "crsa"), "meaning_A"].values[0]]
+    round_meaning_B = meanings["B"][df.loc[(df["idx"] == sample_id) & (df["model"] == "crsa"), "meaning_B"].values[0]]
+    dialog = df.loc[(df["idx"] == sample_id) & (df["model"] == "crsa"), ["turn","speaker","utterance"]].set_index("turn").sort_index().copy()
+
+    # Belief
+    listener_logbelief = []
+    listener_meanings = []
+    for turn, (spk, logbelief_A, logbelief_B) in sample.iterrows():
+        logbelief_S = logbelief_A if spk == "A" else logbelief_B
+        logbelief_S = torch.softmax(logbelief_S, dim=0).numpy()
+        listener_logbelief.append(logbelief_S)
+        listener_meanings.append(meanings["B"] if spk == "A" else meanings["A"])
+    listener_logbelief = np.vstack(listener_logbelief).T
+    listener_meanings = np.array(listener_meanings).T
+    fig, ax = plt.subplots(1, 1, figsize=(8, 10))
+    sns.heatmap(
+        listener_logbelief, ax=ax, cmap="viridis", cbar=True, linewidths=0, linecolor=None, 
+        annot=listener_meanings, fmt="s", cbar_kws={"aspect": 50}
+    )
+    ax.set_yticks([])
+    ax.set_yticklabels([])
+    ax.set_xticks(turns.astype(int) - 0.5)
+    ax.set_xticklabels(
+        [f"Turn {turn}\n$S_{spk}$: {utterances[utt]}" for turn, (spk,utt) in dialog.iterrows()], rotation=0, fontsize=8)
+    ax.set_title(f"Speaker Belief\n$m_A={round_meaning_A},m_B={round_meaning_B}$", fontsize=14)
+
+    fig.tight_layout()
+    plt.savefig(output_dir / f"belief.pdf", bbox_inches="tight", dpi=300)
+    plt.close(fig)
+
+
 def main(
     game_size: int = 3,
     n_rounds: int = 100,
@@ -67,9 +167,13 @@ def main(
     # Set random seed for reproducibility
     seed_everything(seed, verbose=False)
 
+    # Init dataset
+    dataset = FindA1Dataset(game_size, n_rounds)
+
     # Model is the combination of literal speaker and pragmatic model
     results = []
     for model_name in models:
+        # first_time = True
 
         # Check if model has already run
         if (output_dir / f"{model_name}_results.pkl").exists():
@@ -78,17 +182,14 @@ def main(
             continue
         logger.info(f"Running model {model_name}")
 
-        # Init dataset
-        dataset = FindA1Dataset(game_size, n_rounds)
-
         # Init literal speaker
         if "_wm" in model_name:
-            speaker = DynamicLexicon.from_lexicon(dataset.world["lexicon_A"], dataset.world["lexicon_B"])
+            speaker = DynamicLexicon(dataset.world["lexicon_A"], dataset.world["lexicon_B"])
         else:
-            speaker = StaticLexicon.from_lexicon(dataset.world["lexicon_A"], dataset.world["lexicon_B"])
+            speaker = StaticLexicon(dataset.world["lexicon_A"], dataset.world["lexicon_B"])
 
         # Init pragmatic model
-        model = init_model(model_name.split("_")[0], dataset.world["logprior"])       
+        model = init_model(model_name.split("_")[0], dataset.world["logprior"], max_depth=max_depth, tolerance=tolerance)       
 
         # Generate pragmatic dialogs
         model_results = []
@@ -110,10 +211,13 @@ def main(
                     logger.info(f"Round {i+1}/{len(dataset)}, Turn {turn}, Speaker {spk_name}")
 
                 # Get the literal speaker
+                # if turn == 6 and first_time and model_name == "literal_wm":
+                #     import pdb; pdb.set_trace()
+                #     first_time = False
                 lit_logspk, costs = speaker(past_utterances, spk_name)
 
                 # Run the pragmatic model
-                prag_logspk, prag_loglst = model.run_turn(lit_logspk, spk_name, costs, alpha, max_depth, tolerance)
+                prag_logspk, prag_loglst = model.run_turn(lit_logspk, spk_name, costs, alpha)
 
                 # Sample an utterance from the pragmatic speaker
                 meaning_S = meaning_A if spk_name == "A" else meaning_B
@@ -132,6 +236,9 @@ def main(
                     "target": target,
                     "prag_logspk": prag_logspk,
                     "prag_loglst": prag_loglst,
+                    "logbelief_A": model.logbeliefs[-1]["A"] if model_name in ["crsa", "crsa_wm"] else None,
+                    "logbelief_B": model.logbeliefs[-1]["B"] if model_name in ["crsa", "crsa_wm"] else None,
+                    "iter_num": model.turns[-1].iter_num,
                 })
 
                 # Update turns count
@@ -147,6 +254,12 @@ def main(
 
     # Plot results
     plot_turns(results, models, output_dir)
+    sample_id = 0
+    meanings = {
+        "A": dataset.world["meanings_A"],
+        "B": dataset.world["meanings_B"],
+    }
+    plot_belief_example(results, sample_id, meanings, dataset.world["utterances"], output_dir)
 
 
 def setup():

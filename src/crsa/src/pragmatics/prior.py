@@ -62,6 +62,8 @@ class PriorTurn:
         self.listener = Listener(logprior)
         self.speaker = Speaker(logprior, self.costs, self.alpha)
 
+        self.iter_num = 0
+
     def run(self, lit_logspk):
 
         # Init agents
@@ -82,11 +84,12 @@ class Prior:
         prag_logspk = self.turns[-1].speaker.as_tensor
 
         # Sample an utterance from the pragmatic speaker
-        utt_idx = sample_utterance(prag_logspk, meaning_S, sampling_strategy)
+        logits = prag_logspk[meaning_S, :]
+        utt_idx = sample_utterance(logits, sampling_strategy)
 
         return utt_idx
     
-    def run_turn(self, lit_logspk, spk_name, costs, alpha=1.0, max_depth=float('inf'), tolerance=1e-3):
+    def run_turn(self, lit_logspk, spk_name, costs, alpha=1.0):
 
         logprior = self.logprior.clone() if spk_name == "A" else self.logprior.clone().transpose(0, 1)
 

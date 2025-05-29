@@ -91,10 +91,11 @@ class YRSAGain:
         self.costs = costs
         self.alpha = alpha
 
-    def init(self):
+    def init(self, listener, speaker):
         self.cond_entropy_history = []
         self.listener_value_history = []
         self.gain_history = []
+        self.compute_gain(listener, speaker)
 
     def _compute_cond_entropy(self, speaker):
         prag_logspk = speaker.as_tensor
@@ -175,7 +176,7 @@ class YRSATurn:
         # Init agents
         self.listener.init(lit_logspk)
         self.speaker.init(lit_logspk)
-        self.gain.init()
+        self.gain.init(self.listener, self.speaker)
 
         # Run the model for the given number of iterations
         i = 0
@@ -191,12 +192,16 @@ class YRSATurn:
                 break
             i += 1
 
-
+    @property
+    def iter_num(self):
+        return len(self.gain.gain_history)
 
 class YRSA:
 
-    def __init__(self, logprior):
+    def __init__(self, logprior, max_depth=float('inf'), tolerance=1e-3):
         self.logprior = logprior
+        self.max_depth = max_depth
+        self.tolerance = tolerance
 
     def reset(self):
         self.turns = []
@@ -206,11 +211,12 @@ class YRSA:
         prag_logspk = self.turns[-1].speaker.as_tensor
 
         # Sample an utterance from the pragmatic speaker
-        utt_idx = sample_utterance(prag_logspk, meaning_S, sampling_strategy)
+        logits = prag_logspk[meaning_S, :]
+        utt_idx = sample_utterance(logits, sampling_strategy)
 
         return utt_idx
     
-    def run_turn(self, lit_logspk, spk_name, costs, alpha=1.0, max_depth=float('inf'), tolerance=1e-3):
+    def run_turn(self, lit_logspk, spk_name, costs, alpha=1.0):
 
         logprior = self.logprior.clone() if spk_name == "A" else self.logprior.clone().transpose(0, 1)
 
@@ -219,8 +225,8 @@ class YRSA:
             logprior=logprior,
             costs=costs,
             alpha=alpha,
-            max_depth=max_depth,
-            tolerance=tolerance,
+            max_depth=self.max_depth,
+            tolerance=self.tolerance,
         )
         model.run(lit_logspk)
         self.turns.append(model)
