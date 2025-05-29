@@ -1,6 +1,0 @@
-
-
-
-
-class PromptBasedModel:
-    pass
