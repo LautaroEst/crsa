@@ -2,9 +2,6 @@
 import re
 import torch
 
-ZERO = 1e-10
-INF = 1e10
-
 def multinomial_num_samples_1(probs: torch.Tensor) -> torch.Tensor:
     if torch.compiler.is_compiling():
         # Faster alternative to `torch.multinomial(probs, num_samples=1)` that is also CUDAGraph friendly
