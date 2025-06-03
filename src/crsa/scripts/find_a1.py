@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from ..src.io import init_logger, read_yaml
+from ..src.io import init_logger, read_yaml, check_iter_args
 from ..src.datasets import FindA1Dataset
 from ..src.pragmatics import init_model
 from ..src.speakers import StaticLexicon, DynamicLexicon
@@ -29,28 +29,6 @@ model2config = {
     "yrsa-literal": {"label": "$L_0^{YRSA}(y|u_t,w_t,m_{L_t})$", "color": "tab:orange", "linestyle": "-", "marker": "x"},
     "prior": {"label": "$P_t(y|m_{L_t})$", "color": "tab:green", "linestyle": "-", "marker": None},
 }
-
-
-def check_iter_args(max_depth, tolerance):
-    if isinstance(max_depth, (int, str)):
-        max_depth = float(max_depth)
-    if isinstance(tolerance, (int, str)):
-        tolerance = float(tolerance)
-
-    if max_depth is None and tolerance is None:
-        raise ValueError("Either max_depth or tolerance must be provided.")
-    elif max_depth is None and isinstance(tolerance, (int, float)):
-        max_depth = float("inf")
-    elif isinstance(max_depth, (int, str)) and tolerance is None:
-        tolerance = 0.
-    elif isinstance(max_depth, float) and isinstance(tolerance, float):
-        if max_depth <= 0:
-            raise ValueError("max_depth must be a positive integer or 'inf'.")
-        if tolerance < 0:
-            raise ValueError("tolerance must be a non-negative number.")
-    else:
-        raise ValueError("Invalid combination of max_depth and tolerance.")
-    return max_depth, tolerance
 
 
 def plot_turns(df, models, output_dir):
@@ -173,7 +151,6 @@ def main(
     # Model is the combination of literal speaker and pragmatic model
     results = []
     for model_name in models:
-        # first_time = True
 
         # Check if model has already run
         if (output_dir / f"{model_name}_results.pkl").exists():
@@ -211,9 +188,6 @@ def main(
                     logger.info(f"Round {i+1}/{len(dataset)}, Turn {turn}, Speaker {spk_name}")
 
                 # Get the literal speaker
-                # if turn == 6 and first_time and model_name == "literal_wm":
-                #     import pdb; pdb.set_trace()
-                #     first_time = False
                 lit_logspk, costs = speaker(past_utterances, spk_name)
 
                 # Run the pragmatic model

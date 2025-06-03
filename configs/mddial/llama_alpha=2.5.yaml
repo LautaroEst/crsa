@@ -1,0 +1,14 @@
+
+llm: "meta-llama/Llama-3.2-1B-Instruct"
+
+models: 
+  - "crsa"
+  - "yrsa" 
+  - "yrsa-literal" 
+  - "prior"
+
+alpha: 2.5
+tolerance: 1e-3
+max_depth: inf
+seed: 7423
+log_every: 10

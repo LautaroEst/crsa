@@ -13,12 +13,12 @@
             "module": "crsa.tests.crsa",
         },
         {
-            "name": "Debug: CRSA 2",
+            "name": "Debug: llm speaker",
             "type": "debugpy",
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
             "request": "launch",
-            "module": "crsa.tests.crsa2",
+            "module": "crsa.tests.llmspeaker",
         }
     ]
 }

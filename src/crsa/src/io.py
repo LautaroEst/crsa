@@ -28,3 +28,27 @@ def read_yaml(path: Path):
     with open(path, "r") as f:
         config = yaml.safe_load(f)
     return config
+
+
+
+
+def check_iter_args(max_depth, tolerance):
+    if isinstance(max_depth, (int, str)):
+        max_depth = float(max_depth)
+    if isinstance(tolerance, (int, str)):
+        tolerance = float(tolerance)
+
+    if max_depth is None and tolerance is None:
+        raise ValueError("Either max_depth or tolerance must be provided.")
+    elif max_depth is None and isinstance(tolerance, (int, float)):
+        max_depth = float("inf")
+    elif isinstance(max_depth, (int, str)) and tolerance is None:
+        tolerance = 0.
+    elif isinstance(max_depth, float) and isinstance(tolerance, float):
+        if max_depth <= 0:
+            raise ValueError("max_depth must be a positive integer or 'inf'.")
+        if tolerance < 0:
+            raise ValueError("tolerance must be a non-negative number.")
+    else:
+        raise ValueError("Invalid combination of max_depth and tolerance.")
+    return max_depth, tolerance
