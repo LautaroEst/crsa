@@ -52,24 +52,27 @@ def predict(speaker: LLMSpeaker, dataset: MDDialDataset, log_every: int = 10, lo
     return predictions
         
 
-def run_pragmatic_models(predictions: Predictions, logprior: torch.Tensor, models: List[str], alpha: float, max_depth: Union[int, Literal['inf']], tolerance: float, output_dir: Path, logger=None, log_every: int = 10):
+def run_pragmatic_models(predictions: Predictions, logprior: torch.Tensor, models: List[str], alpha: float, max_depth: Union[int, Literal['inf']], tolerance: float, output_dir: Path, logger=None, log_every: int = 10, save_memory: bool = True):
 
-    results = []
     for model_name in models:
 
-        # Check if model has already run
-        if (output_dir / f"{model_name}_results.pkl").exists():
-            results.append(pd.read_pickle(output_dir / f"{model_name}_results.pkl"))
-            logger.info(f"Model {model_name} already run. Skipping.")
-            continue
         logger.info(f"Running model {model_name}")
 
         # Init pragmatic model
-        model = init_model(model_name.split("_")[0], logprior, max_depth=max_depth, tolerance=tolerance)       
+        model = init_model(model_name.split("_")[0], logprior, max_depth=max_depth, tolerance=tolerance, save_memory=save_memory)       
 
         # Iterate over samples in the dataset
-        model_results = []
+        if (predictions_dir := output_dir / f"{model_name}_predictions").exists():
+            model_predictions = Predictions.from_directory(predictions_dir)
+        else:
+            model_predictions = Predictions([], predictions_dir)
+            predictions_dir.mkdir(parents=True, exist_ok=True)
+
         for i, sample in enumerate(predictions):
+
+            if sample in model_predictions:
+                logger.info(f"Sample {sample['idx']} already processed by model {model_name}. Skipping.")
+                continue
 
             # Get the meanings and target
             meaning_patient = sample["meaning_patient"]
@@ -84,6 +87,7 @@ def run_pragmatic_models(predictions: Predictions, logprior: torch.Tensor, model
                 logger.info(f"Runnung model {model_name} on sample {i+1}/{len(predictions)}")
 
             # Run each turn
+            turns_results = []
             for turn, utterance in enumerate(sample["utterances"], start=1):
                 spk_name = "A" if utterance["speaker"] == "patient" else "B"
                 utt_idx = utterance["content"]
@@ -95,32 +99,28 @@ def run_pragmatic_models(predictions: Predictions, logprior: torch.Tensor, model
                 model.update_belief_(utt_idx)
 
                 # Save results
-                model_results.append({
-                    "model": model_name,
-                    "idx": sample["idx"],
+                turns_results.append({
                     "turn": turn,
                     "utterance": utt_idx,
                     "speaker": spk_name,
-                    "meaning_A": meaning_patient,
-                    "meaning_B": meaning_doctor,
-                    "target": target,
                     "prag_spk_dist": prag_logspk[meaning_patient if spk_name == "A" else meaning_doctor, :],
                     "prag_lst_dist": prag_loglst[utt_idx, meaning_doctor if spk_name == "A" else meaning_patient, :],
                     "logbelief_A": model.logbeliefs[-1]["A"] if model_name == "crsa" else None,
                     "logbelief_B": model.logbeliefs[-1]["B"] if model_name == "crsa" else None,
                     "iter_num": model.turns[-1].iter_num,
                 })
+            
+            # Save predictions for the model
+            model_predictions.add({
+                "model": model_name,
+                "idx": sample["idx"],
+                "meaning_A": meaning_patient,
+                "meaning_B": meaning_doctor,
+                "target": target,
+                "turns": turns_results,
+            })
 
-        # Convert results to DataFrame
-        model_results_df = pd.DataFrame(model_results)
-        model_results_df.to_pickle(output_dir / f"{model_name}_results.pkl")
-        results.append(model_results_df)
-    
-    # Concatenate all results
-    results = pd.concat(results, ignore_index=True)
-
-    # Show results
-    logger.info(f"Results for all models:\n{results.head()}")
+    # TODO: Show results
 
 
 
@@ -132,6 +132,7 @@ def main(
     tolerance: float = None,
     seed: int = 0,
     log_every: int = 10,
+    save_memory: bool = True,
     **kwargs
 ):
     # Validate iteration parameters
@@ -147,21 +148,22 @@ def main(
     # Initialize the dataset
     dataset = MDDialDataset(split="train")
 
-    # Initialize the LLM speaker
-    speaker = LLMSpeaker.load(model=llm)
-    speaker.distribute(accelerator="auto", precision="bf16-true")
+    # # Initialize the LLM speaker
+    # speaker = LLMSpeaker.load(model=llm)
+    # speaker.distribute(accelerator="auto", precision="bf16-true")
 
-    # Predict literal speakers
-    predictions = predict(
-        speaker, 
-        dataset, 
-        log_every=log_every, 
-        logger=logger, 
-        output_dir=output_dir
-    )
+    # # Predict literal speakers
+    # predictions = predict(
+    #     speaker, 
+    #     dataset, 
+    #     log_every=log_every, 
+    #     logger=logger, 
+    #     output_dir=output_dir
+    # )
+    predictions = Predictions.from_directory(output_dir / "processed")
 
     # Run RSA models
-    run_pragmatic_models(predictions, dataset.world["logprior"], models, alpha, max_depth, tolerance, output_dir, logger, log_every)
+    run_pragmatic_models(predictions, dataset.world["logprior"], models, alpha, max_depth, tolerance, output_dir, logger, log_every, save_memory=save_memory)
 
 
 

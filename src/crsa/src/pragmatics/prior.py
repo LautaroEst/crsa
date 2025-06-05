@@ -18,12 +18,8 @@ class Listener:
         self.history = [lit_loglst]
 
     @property
-    def literal_as_tensor(self):
-        return self.history[0]
-    
-    @property
     def as_tensor(self):
-        return self.history[-1]
+        return self.history[0]
     
 
 class Speaker:
@@ -41,8 +37,7 @@ class Speaker:
 
     @property
     def as_tensor(self):
-        if self.history:
-            return self.history[-1]
+        return self.history[0]
     
 
 class PriorTurn:

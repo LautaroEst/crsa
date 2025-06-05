@@ -6,10 +6,11 @@ from .utils import sample_utterance
 
 class Listener:
 
-    def __init__(self, logprior, logbelief_L):
+    def __init__(self, logprior, logbelief_L, save_memory=False):
         self.logprior = logprior
         self.logbelief_L = logbelief_L
         self.history = []
+        self.save_memory = save_memory
 
     def init(self, lit_logspk):
         lit_loglst = self._update(lit_logspk)
@@ -22,7 +23,11 @@ class Listener:
 
         logspk = speaker.as_tensor.clone()
         prag_lst = self._update(logspk)
-        self.history.append(prag_lst)
+
+        if self.save_memory and len(self.history) > 1:
+            self.history[-1] = prag_lst
+        else:
+            self.history.append(prag_lst)
 
     def _update(self, logspk):
         if self.logbelief_L is None:
@@ -44,12 +49,13 @@ class Listener:
 
 class Speaker:
 
-    def __init__(self, logprior, logbelief_S=None, costs=None, alpha=1.0):
+    def __init__(self, logprior, logbelief_S=None, costs=None, alpha=1.0, save_memory=False):
         self.logprior = logprior
         self.logbelief_S = logbelief_S
         self.costs = costs
         self.alpha = alpha
         self.history = []
+        self.save_memory = save_memory
 
     def init(self, lit_logspk):
         self.history = [lit_logspk.clone()]
@@ -86,12 +92,19 @@ class Speaker:
         pre_softmax = pre_softmax.sum(dim=2).sum(dim=2).T
         prag_logspk = torch.log_softmax(self.alpha * pre_softmax, dim=1)
         prag_logspk[prag_logspk.isnan()] = -torch.inf 
-        self.history.append(prag_logspk)
+
+        if self.save_memory and len(self.history) > 1:
+            self.history[-1] = prag_logspk
+        else:
+            self.history.append(prag_logspk)
         
     @property
+    def literal_as_tensor(self):
+        return self.history[0]
+    
+    @property
     def as_tensor(self):
-        if self.history:
-            return self.history[-1]
+        return self.history[-1]
     
 
 
@@ -177,6 +190,7 @@ class CRSATurn:
         alpha,
         max_depth,
         tolerance,
+        save_memory=False
     ):
         self.spk_name = spk_name
         self.costs = costs
@@ -187,8 +201,8 @@ class CRSATurn:
         self.max_depth = max_depth
         self.tolerance = tolerance
 
-        self.listener = Listener(logprior, self.logbelief_L)
-        self.speaker = Speaker(logprior, self.logbelief_S, self.costs, self.alpha)
+        self.listener = Listener(logprior, self.logbelief_L, save_memory=save_memory)
+        self.speaker = Speaker(logprior, self.logbelief_S, self.costs, self.alpha, save_memory=save_memory)
         self.gain = CRSAGain(logprior, self.logbelief_L, self.logbelief_S, self.costs, self.alpha)
 
     def run(self, lit_logspk):
@@ -220,10 +234,11 @@ class CRSATurn:
 
 class CRSA:
 
-    def __init__(self, logprior, max_depth=float('inf'), tolerance=1e-3):
+    def __init__(self, logprior, max_depth=float('inf'), tolerance=1e-3, save_memory=False):
         self.logprior = logprior
         self.max_depth = max_depth
         self.tolerance = tolerance
+        self.save_memory = save_memory
 
     def reset(self):
         self.logbeliefs = []
@@ -285,6 +300,7 @@ class CRSA:
             alpha=alpha,
             max_depth=self.max_depth,
             tolerance=self.tolerance,
+            save_memory=self.save_memory
         )
         model.run(lit_logspk)
         self.turns.append(model)
