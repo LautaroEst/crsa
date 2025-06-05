@@ -1,7 +1,9 @@
 
+from copy import deepcopy
 import json
 
 import torch
+from tqdm import tqdm
 
 
 class MDDialDataset:
@@ -20,7 +22,7 @@ class MDDialDataset:
         data = {"dialogs": [dialogs[f"Dialog {i}"] for i in range(1, len(dialogs) + 1)]}
         with open(self.data_dir + "disease.txt", "r") as f:
             diseases = [line.strip() for line in f.readlines()]
-        with open(self.data_dir + "symptoms.txt", "r") as f:
+        with open(self.data_dir + "symptom.txt", "r") as f:
             symptoms = [line.strip() for line in f.readlines()]
         with open(self.data_dir + "disease_symptoms.txt", "r") as f:
             disease2symptoms = json.load(f)
@@ -29,10 +31,10 @@ class MDDialDataset:
         valid_data = []
         unique_meanings_patient = []
         meaning_id = 0
-        for i, dialog in enumerate(data["dialogues"]):
+        for i, dialog in enumerate(tqdm(data["dialogs"])):
             
             found = False
-            for d in diseases:
+            for d_idx, d in enumerate(diseases):
                 if d in dialog[-1]["doctor"]:
                     found = True
                     break
@@ -40,7 +42,7 @@ class MDDialDataset:
             if found:
                 sample = {}
                 sample["idx"] = torch.tensor(i)
-                sample["target"] = torch.tensor(d)
+                sample["target"] = torch.tensor(d_idx)
 
                 # Utterances
                 utterances = []
@@ -70,13 +72,13 @@ class MDDialDataset:
                 meaning_patient = meaning_patient * symptoms_in_dialog
 
                 # Keep track of the number of times each meaning appears
-                if (meaning_id, d) in d_count:
-                    d_count[(meaning_id, d)] += 1
+                if (meaning_id, d_idx) in d_count:
+                    d_count[(meaning_id, d_idx)] += 1
                 else:
-                    d_count[(meaning_id, d)] = 1
+                    d_count[(meaning_id, d_idx)] = 1
 
                 # Patient meanings    
-                sample["meaning_patient"] = meaning_id
+                sample["meaning_patient"] = torch.tensor(meaning_id)
                 
                 # Doctor meanings (Always the same meaning)
                 sample["meaning_doctor"] = torch.tensor(0)    
@@ -92,15 +94,33 @@ class MDDialDataset:
         prior = torch.zeros((len(unique_meanings_patient), 1, len(diseases)))
         for i, d in enumerate(diseases):
             for j, meaning in enumerate(unique_meanings_patient):
-                prior[j, 0, i] = d_count[(j, d)] 
+                prior[j, 0, i] = d_count[(j, i)] 
         logprior = torch.log(prior / torch.sum(prior))
 
         world = {
+            "speakers": ["patient", "doctor"],
             "diseases": diseases,
             "symptoms": symptoms,
+            "system_prompts": {
+                "patient": [self._create_patient_prompt(s, symptoms) for s in unique_meanings_patient],
+                "doctor": [self._create_doctor_prompt(diseases)],
+            },
             "unique_meanings_patient": unique_meanings_patient,
             "logprior": logprior,
         }
+
+        shots_ids = [5, 43, 1204, 864]
+        shots = []
+        for i in shots_ids:
+            record = deepcopy(valid_data[i])
+            shots.append({
+                "idx": record["idx"],
+                "utterances": record["utterances"],
+                "meaning_patient": record["meaning_patient"],
+                "meaning_doctor": record["meaning_doctor"],
+                "target": record["target"],
+            })
+        self.shots = shots
 
         return valid_data, world
     
@@ -115,3 +135,33 @@ class MDDialDataset:
 
     def __len__(self):
         return len(self.data)
+    
+
+    def _create_patient_prompt(self, meaning, symptoms):
+        prompt = (
+            "You are an assistant that simulates to be a patient "
+            "who has a disease and describes the symptoms to the user, "
+            "which is a medical doctor.\n\n"
+        )
+        for example in self.shots:
+            system_prompt += (
+                "Here is an example of a conversation "
+                "between the assitant (i.e., the patient) and the user (i.e., the doctor). "
+                "You are experiencing the following symptoms:\n"
+            )
+            for s_id, s_name in zip(self.world["unique_meanings_patient"][example["meaning_patient"].item()], symptoms):
+                if s_id == 1:
+                    system_prompt += f"- {s_name}\n"
+        system_prompt += (
+            "Now, you are experiencing the following symptoms:\n"
+        )
+        for s_id, s_name in zip(self.world["unique_meanings_patient"][meaning], symptoms):
+            if s_id == 1:
+                prompt += f"- {s_name}\n"
+        prompt += (
+            "Now, please describe your symptoms to the doctor in a natural way.\n"
+        )
+        return prompt
+
+    def _create_doctor_prompt(self, diseases):
+        pass

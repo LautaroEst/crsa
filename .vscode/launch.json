@@ -19,6 +19,15 @@
             "cwd": "${workspaceFolder}",
             "request": "launch",
             "module": "crsa.tests.llmspeaker",
+        },
+        {
+            "name": "Debug: mddial",
+            "type": "debugpy",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "request": "launch",
+            "module": "crsa.scripts.mddial",
+            "args": ["pythia_alpha=2.5"]
         }
     ]
 }

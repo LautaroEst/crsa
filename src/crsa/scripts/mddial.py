@@ -42,13 +42,16 @@ def predict(speaker: LLMSpeaker, dataset: MDDialDataset, log_every: int = 10, sa
         if (i + 1) % log_every == 0:
             logger.info(f"Processing sample {i+1}/{len(dataset)} (idx: {sample['idx']})")
 
-
-        utterances, logspk, costs = predict_utterance()
+        logspk, utterances, costs = speaker.get_dialog_speakers(
+            sample["utterances"],
+            dataset.world["system_prompts"],
+            dataset.world["speakers"]
+        )
                 
         prediction = {
             "idx": sample["idx"], 
-            # "meaning_patient": sample["dialog_from_patients_view"],
-            "meaning_doctor": sample["dialog_from_doctors_view"],
+            "meaning_patient": sample["meaning_patient"],
+            "meaning_doctor": sample["meaning_doctor"],
             "target": sample["target"],
             "logspk": logspk,
             "utterances": utterances,
