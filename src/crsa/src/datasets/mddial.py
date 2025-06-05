@@ -3,7 +3,6 @@ from copy import deepcopy
 import json
 
 import torch
-from tqdm import tqdm
 
 
 class MDDialDataset:
@@ -27,7 +26,7 @@ class MDDialDataset:
 
         valid_data = []
         diseases_count = {}
-        for i, dialog in enumerate(tqdm(data["dialogs"])):
+        for i, dialog in enumerate(data["dialogs"]):
             
             found = False
             for d_idx, d in enumerate(diseases):

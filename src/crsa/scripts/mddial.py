@@ -9,35 +9,25 @@ import torch
 
 from ..src.io import init_logger, read_yaml, check_iter_args
 from ..src.datasets import MDDialDataset
+from ..src.datasets.utils import Predictions
 from ..src.pragmatics import init_model
 from ..src.speakers import LLMSpeaker
 
 
 
-def predict(speaker: LLMSpeaker, dataset: MDDialDataset, log_every: int = 10, save_every: int = 10, logger=None, output_path: Path = None):
+def predict(speaker: LLMSpeaker, dataset: MDDialDataset, log_every: int = 10, logger=None, output_dir: Path = None):
 
-    # If output_path exists, load predictions from it
-    if output_path.exists():
-        logger.info(f"Output file {output_path} already exists. Skipping prediction.")
-        with open(output_path, "rb") as f:
-            predictions = pickle.load(f)
-        return predictions
-    
-    # If partial output file exists, load it and resume from there
-    if (partial_output_path := output_path.with_suffix(".partial.pkl")).exists():
-        logger.info(f"Partial output file {partial_output_path} already exists. Resuming from it.")
-        with open(partial_output_path, "rb") as f:
-            predictions = pickle.load(f)
-        computed_idx = {sample["idx"] for sample in predictions}
-    
-    # If no partial output file exists, initialize empty predictions and computed indices
+    if (predictions_dir := output_dir / "processed").exists():
+        predictions = Predictions.from_directory(predictions_dir)
     else:
-        computed_idx = set()
-        predictions = []
+        predictions = Predictions([], predictions_dir)
+        predictions_dir.mkdir(parents=True, exist_ok=True)
+
 
     # Start processing samples
     for i, sample in enumerate(dataset.iter_samples()):
-        if sample["idx"] in computed_idx:
+        if sample in predictions:
+            logger.info(f"Sample {sample['idx']} already processed. Skipping.")
             continue
 
         if (i + 1) % log_every == 0:
@@ -57,28 +47,13 @@ def predict(speaker: LLMSpeaker, dataset: MDDialDataset, log_every: int = 10, sa
             "utterances": utterances,
         }
 
-        # Update competed indices and predictions
-        computed_idx.add(sample["idx"])
-        predictions.append(prediction)
-
-        # Save intermediate predictions to a partial file
-        if (i + 1) % save_every == 0:
-            logger.info(f"Saving progress to {partial_output_path} after processing {i+1} samples")
-            with open(partial_output_path, "wb") as f:
-                pickle.dump(predictions, f)
-
-    # Save predictions to a final file
-    with open(output_path, "wb") as f:
-        pickle.dump(predictions, f)
-
-    # Remove the partial file if it exists
-    if partial_output_path.exists():
-        partial_output_path.unlink()
+        # Update computed predictions
+        predictions.add(prediction)
 
     return predictions
         
 
-def run_pragmatic_models(dataset: MDDialDataset, predictions: List[dict], models: List[str], alpha: float, max_depth: Union[int, Literal['inf']], tolerance: float, output_dir: Path, logger=None, log_every: int = 10):
+def run_pragmatic_models(dataset: MDDialDataset, predictions: Predictions, models: List[str], alpha: float, max_depth: Union[int, Literal['inf']], tolerance: float, output_dir: Path, logger=None, log_every: int = 10):
 
     results = []
     for model_name in models:
@@ -111,14 +86,13 @@ def run_pragmatic_models(dataset: MDDialDataset, predictions: List[dict], models
 
             # Run each turn
             for turn, utterance in enumerate(sample["utterances"], start=1):
-                spk_name = utterance["speaker"]
+                spk_name = "A" if utterance["speaker"] == "patient" else "B"
                 utt_idx = utterance["content"]
                 lit_logspk = utterance["logits"]
                 costs = torch.zeros(lit_logspk.shape[1], dtype=torch.float32)
 
                 # Run the pragmatic model
-                # prag_logspk, prag_loglst = model.run_turn(lit_logspk, spk_name, costs, alpha)
-                prag_logspk, prag_loglst = None, None
+                prag_logspk, prag_loglst = model.run_turn(lit_logspk, spk_name, costs, alpha)
 
                 # Save results
                 model_results.append({
@@ -130,8 +104,8 @@ def run_pragmatic_models(dataset: MDDialDataset, predictions: List[dict], models
                     "meaning_A": meaning_patient,
                     "meaning_B": meaning_doctor,
                     "target": target,
-                    "prag_logspk": prag_logspk,
-                    "prag_loglst": prag_loglst,
+                    "prag_spk_dist": prag_logspk[meaning_patient if spk_name == "A" else meaning_doctor, :],
+                    "prag_lst_dist": prag_loglst[meaning_doctor if spk_name == "A" else meaning_patient, :],
                     "logbelief_A": model.logbeliefs[-1]["A"] if model_name == "crsa" else None,
                     "logbelief_B": model.logbeliefs[-1]["B"] if model_name == "crsa" else None,
                     "iter_num": model.turns[-1].iter_num,
@@ -183,9 +157,8 @@ def main(
         speaker, 
         dataset, 
         log_every=log_every, 
-        save_every=save_every, 
         logger=logger, 
-        output_path=output_dir / "predictions.pkl"
+        output_dir=output_dir
     )
 
     # Run RSA models
