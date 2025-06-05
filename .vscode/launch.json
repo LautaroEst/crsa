@@ -27,7 +27,7 @@
             "cwd": "${workspaceFolder}",
             "request": "launch",
             "module": "crsa.scripts.mddial",
-            "args": ["pythia_alpha=2.5"]
+            "args": ["llama_alpha=2.5"]
         }
     ]
 }

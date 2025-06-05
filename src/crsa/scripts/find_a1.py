@@ -196,6 +196,7 @@ def main(
                 # Sample an utterance from the pragmatic speaker
                 meaning_S = meaning_A if spk_name == "A" else meaning_B
                 new_utt = model.sample_utterance(meaning_S, sampling_strategy)
+                model.update_belief_(new_utt)
                 past_utterances.append({"spk_name": spk_name, "utterance": new_utt})
 
                 # Save results

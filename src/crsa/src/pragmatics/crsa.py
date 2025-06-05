@@ -237,6 +237,10 @@ class CRSA:
         logits = prag_logspk[meaning_S, :]
         utt_idx = sample_utterance(logits, sampling_strategy)
 
+        return utt_idx
+
+    def update_belief_(self, utt_idx):
+
         # Update the belief history
         model = self.turns[-1]
         spk_name = self.turns[-1].spk_name
@@ -263,7 +267,6 @@ class CRSA:
                     "B": self.logbeliefs[-1]["B"],
                 })
 
-        return utt_idx
     
     def run_turn(self, lit_logspk, spk_name, costs, alpha=1.0):
 

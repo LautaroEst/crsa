@@ -113,7 +113,7 @@ class LLMSpeaker(LitGPTLLM):
                 prompt_str = self.prompt_style.apply(prompt)
                 encoded_prompt = self.encode_prompt_string(prompt_str)
                 logits[speaker].append(self(encoded_prompt.unsqueeze(0)).log_softmax(dim=-1).cpu())
-                tokens[speaker].append(encoded_prompt.tolist())
+                tokens[speaker].append(encoded_prompt[1:].tolist() + [self.preprocessor.tokenizer.eos_id])
             
         speakers_logits = []
         speaker_idx = 0

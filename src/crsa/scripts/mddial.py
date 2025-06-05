@@ -1,7 +1,6 @@
 
 import argparse
 from pathlib import Path
-import pickle
 from typing import List, Literal, Union
 from lightning import seed_everything
 import pandas as pd
@@ -53,7 +52,7 @@ def predict(speaker: LLMSpeaker, dataset: MDDialDataset, log_every: int = 10, lo
     return predictions
         
 
-def run_pragmatic_models(dataset: MDDialDataset, predictions: Predictions, models: List[str], alpha: float, max_depth: Union[int, Literal['inf']], tolerance: float, output_dir: Path, logger=None, log_every: int = 10):
+def run_pragmatic_models(predictions: Predictions, logprior: torch.Tensor, models: List[str], alpha: float, max_depth: Union[int, Literal['inf']], tolerance: float, output_dir: Path, logger=None, log_every: int = 10):
 
     results = []
     for model_name in models:
@@ -66,7 +65,7 @@ def run_pragmatic_models(dataset: MDDialDataset, predictions: Predictions, model
         logger.info(f"Running model {model_name}")
 
         # Init pragmatic model
-        model = init_model(model_name.split("_")[0], dataset.world["logprior"], max_depth=max_depth, tolerance=tolerance)       
+        model = init_model(model_name.split("_")[0], logprior, max_depth=max_depth, tolerance=tolerance)       
 
         # Iterate over samples in the dataset
         model_results = []
@@ -93,6 +92,7 @@ def run_pragmatic_models(dataset: MDDialDataset, predictions: Predictions, model
 
                 # Run the pragmatic model
                 prag_logspk, prag_loglst = model.run_turn(lit_logspk, spk_name, costs, alpha)
+                model.update_belief_(utt_idx)
 
                 # Save results
                 model_results.append({
@@ -105,7 +105,7 @@ def run_pragmatic_models(dataset: MDDialDataset, predictions: Predictions, model
                     "meaning_B": meaning_doctor,
                     "target": target,
                     "prag_spk_dist": prag_logspk[meaning_patient if spk_name == "A" else meaning_doctor, :],
-                    "prag_lst_dist": prag_loglst[meaning_doctor if spk_name == "A" else meaning_patient, :],
+                    "prag_lst_dist": prag_loglst[utt_idx, meaning_doctor if spk_name == "A" else meaning_patient, :],
                     "logbelief_A": model.logbeliefs[-1]["A"] if model_name == "crsa" else None,
                     "logbelief_B": model.logbeliefs[-1]["B"] if model_name == "crsa" else None,
                     "iter_num": model.turns[-1].iter_num,
@@ -132,7 +132,6 @@ def main(
     tolerance: float = None,
     seed: int = 0,
     log_every: int = 10,
-    save_every: int = 10,
     **kwargs
 ):
     # Validate iteration parameters
@@ -162,7 +161,7 @@ def main(
     )
 
     # Run RSA models
-    run_pragmatic_models(dataset, predictions, models, alpha, max_depth, tolerance, output_dir, logger, log_every)
+    run_pragmatic_models(predictions, dataset.world["logprior"], models, alpha, max_depth, tolerance, output_dir, logger, log_every)
 
 
 
