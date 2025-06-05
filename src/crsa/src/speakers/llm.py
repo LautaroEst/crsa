@@ -92,9 +92,11 @@ class LLMSpeaker(LitGPTLLM):
     def get_dialog_speakers(self, dialog, meaning_system_prompts, speakers):
         
         logits = {}
+        tokens = {}
         offsets = {}
         for speaker in speakers:
             logits[speaker] = []
+            tokens[speaker] = []
             offsets[speaker] = []
             for m in range(len(meaning_system_prompts[speaker])):
                 system_prompt = meaning_system_prompts[speaker][m]
@@ -111,6 +113,7 @@ class LLMSpeaker(LitGPTLLM):
                 prompt_str = self.prompt_style.apply(prompt)
                 encoded_prompt = self.encode_prompt_string(prompt_str)
                 logits[speaker].append(self(encoded_prompt.unsqueeze(0)).log_softmax(dim=-1).cpu())
+                tokens[speaker].append(encoded_prompt.tolist())
             
         speakers_logits = []
         speaker_idx = 0
@@ -123,7 +126,7 @@ class LLMSpeaker(LitGPTLLM):
                 idx = 0
                 for j in range(start, end):
                     if first:
-                        speakers_logits.append({"speaker": speaker, "logits": [logits[speaker][m][0, j, :]]})
+                        speakers_logits.append({"speaker": speaker, "content": tokens[speaker][m][j],"logits": [logits[speaker][m][0, j, :]]})
                     else:
                         speakers_logits[speaker_idx + idx]["logits"].append(logits[speaker][m][0, j, :])
                     idx += 1

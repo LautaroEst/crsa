@@ -5,6 +5,7 @@ import pickle
 from typing import List, Literal, Union
 from lightning import seed_everything
 import pandas as pd
+import torch
 
 from ..src.io import init_logger, read_yaml, check_iter_args
 from ..src.datasets import MDDialDataset
@@ -42,7 +43,7 @@ def predict(speaker: LLMSpeaker, dataset: MDDialDataset, log_every: int = 10, sa
         if (i + 1) % log_every == 0:
             logger.info(f"Processing sample {i+1}/{len(dataset)} (idx: {sample['idx']})")
 
-        logspk, utterances, costs = speaker.get_dialog_speakers(
+        utterances = speaker.get_dialog_speakers(
             sample["utterances"],
             dataset.world["system_prompts"],
             dataset.world["speakers"]
@@ -53,9 +54,7 @@ def predict(speaker: LLMSpeaker, dataset: MDDialDataset, log_every: int = 10, sa
             "meaning_patient": sample["meaning_patient"],
             "meaning_doctor": sample["meaning_doctor"],
             "target": sample["target"],
-            "logspk": logspk,
             "utterances": utterances,
-            "costs": costs,
         }
 
         # Update competed indices and predictions
@@ -113,9 +112,9 @@ def run_pragmatic_models(dataset: MDDialDataset, predictions: List[dict], models
             # Run each turn
             for turn, utterance in enumerate(sample["utterances"], start=1):
                 spk_name = utterance["speaker"]
-                utt_idx = utterance["utterance"]
-                lit_logspk = utterance["logspk"]
-                costs = utterance["costs"]
+                utt_idx = utterance["content"]
+                lit_logspk = utterance["logits"]
+                costs = torch.zeros(lit_logspk.shape[1], dtype=torch.float32)
 
                 # Run the pragmatic model
                 # prag_logspk, prag_loglst = model.run_turn(lit_logspk, spk_name, costs, alpha)
@@ -221,6 +220,8 @@ def setup():
         logger.info(f"Starting script {Path(__file__).stem}  with config {config_path.stem}")
         main(**config)
         logger.info(f"Script {Path(__file__).stem}  with config {config_path.stem} finished")
+    except KeyboardInterrupt:
+        logger.info(f"Script {Path(__file__).stem}  with config {config_path.stem} interrupted by user")
     except Exception:
         import traceback
         logger.error(f"Error running script {Path(__file__).stem}  with config {config_path.stem}:\n\n{traceback.format_exc()}")

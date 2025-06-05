@@ -11,4 +11,5 @@ alpha: 2.5
 tolerance: 1e-3
 max_depth: inf
 seed: 7423
-log_every: 10
+log_every: 1
+save_every: 1
