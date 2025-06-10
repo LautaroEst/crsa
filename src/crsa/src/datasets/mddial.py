@@ -108,6 +108,7 @@ class MDDialDataset:
             "You are an assistant that simulates to be a patient "
             "who has a disease and describes the symptoms to the user, "
             "which is a medical doctor.\n\n"
+            ""
         )
         for example in shots:
             prompt += (
@@ -121,7 +122,7 @@ class MDDialDataset:
                     prompt += f"User: {utterance['content']}\n"
             prompt += "\n"
         prompt += (
-            "Now, you describe your symptoms to the doctor in a natural way. "
+            "Now, you describe your symptoms to the doctor in your own language. "
             f"You are experiencing the symptoms corresponding to {meaning}.\n"
         )
         return prompt
@@ -130,9 +131,9 @@ class MDDialDataset:
         prompt = (
             "You are an assistant that simulates to be a doctor "
             "who is diagnosing a patient based on the symptoms that he or she describes. "
-            "You can ask questions to the patient, but ultimately, "
+            "You can ask questions to the patient about additional symptoms, but ultimately, "
             "you have provide a diagnosis based on the symptoms described by the patient.\n\n"
-        )
+        ) # Agregar los sintomas y la posibilidad de que pregunte por síntomas adicionales. 
         for i, disease in enumerate(diseases):
             prompt += f"{i + 1}. {disease}\n"
         

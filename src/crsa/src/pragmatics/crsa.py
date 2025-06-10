@@ -1,4 +1,5 @@
 
+from pathlib import Path
 import torch
 
 from .utils import sample_utterance
@@ -173,8 +174,11 @@ class CRSAGain:
     
     def get_diff(self):
         if len(self.gain_history) < 2:
-            return float("inf")
-        return self.gain_history[-1] - self.gain_history[-2] / abs(self.gain_history[-2])
+            return torch.inf
+        elif self.gain_history[-1] - self.gain_history[-2] == 0: 
+            return torch.tensor(0.)
+        else:
+            return self.gain_history[-1] - self.gain_history[-2] / abs(self.gain_history[-2])
 
 
 
@@ -229,6 +233,47 @@ class CRSATurn:
     @property
     def iter_num(self):
         return len(self.gain.gain_history)
+    
+
+    def save(self, path: Path):
+        torch.save({
+            'spk_name': self.spk_name,
+            'logprior': self.logprior,
+            'logbelief_S': self.logbelief_S,
+            'logbelief_L': self.logbelief_L,
+            'costs': self.costs,
+            'alpha': self.alpha,
+            'max_depth': self.max_depth,
+            'tolerance': self.tolerance,
+            'iter_num': self.iter_num,
+            'listeners': self.listener.history,
+            'speakers': self.speaker.history,
+            'gain_history': self.gain.gain_history,
+            'cond_entropy_history': self.gain.cond_entropy_history,
+            'listener_value_history': self.gain.listener_value_history,
+        }, path)
+
+    @classmethod
+    def load(cls, path: Path):
+        data = torch.load(path, weights_only=False)
+        model = cls(
+            spk_name=data['spk_name'],
+            logprior=data['logprior'],
+            logbelief_S=data['logbelief_S'],
+            logbelief_L=data['logbelief_L'],
+            costs=data['costs'],
+            alpha=data['alpha'],
+            max_depth=data['max_depth'],
+            tolerance=data['tolerance']
+        )
+        model.listener.history = data['listeners']
+        model.speaker.history = data['speakers']
+        model.gain.gain_history = data['gain_history']
+        model.gain.cond_entropy_history = data['cond_entropy_history']
+        model.gain.listener_value_history = data['listener_value_history']
+        return model
+
+
 
 
 
@@ -244,7 +289,7 @@ class CRSA:
         self.logbeliefs = []
         self.turns = []
 
-    def sample_utterance(self, meaning_S, sampling_strategy):
+    def sample_utterance(self, meaning_S, sampling_strategy, output_dist=False):
         # Get pragmatic speaker of the last turn
         prag_logspk = self.turns[-1].speaker.as_tensor
 
@@ -252,7 +297,11 @@ class CRSA:
         logits = prag_logspk[meaning_S, :]
         utt_idx = sample_utterance(logits, sampling_strategy)
 
-        return utt_idx
+        if output_dist:
+            dist = torch.softmax(logits, dim=0)
+            return utt_idx, dist
+        else:
+            return utt_idx
 
     def update_belief_(self, utt_idx):
 
@@ -307,4 +356,28 @@ class CRSA:
 
         return model.speaker.as_tensor, model.listener.as_tensor
 
-        
+    def save(self, path: Path):
+        torch.save({
+            'logprior': self.logprior,
+            'max_depth': self.max_depth,
+            'tolerance': self.tolerance,
+            'save_memory': self.save_memory,
+            'logbeliefs': self.logbeliefs,
+            'turns': len(self.turns),
+        }, path / 'model.pt')
+        for t, turn in enumerate(self.turns, start=1):
+            turn.save(path / f'turn_{t}.pt')
+    
+    @classmethod
+    def load(cls, path: Path):
+        data = torch.load(path / "model.pt", weights_only=False)
+        model = cls(
+            logprior=data['logprior'],
+            max_depth=data['max_depth'],
+            tolerance=data['tolerance'],
+            save_memory=data['save_memory']
+        )
+        model.logbeliefs = data['logbeliefs']
+        model.turns = [CRSATurn.load(path / f'turn_{t}.pt') for t in range(1, data['turns'] + 1)]
+        return model
+

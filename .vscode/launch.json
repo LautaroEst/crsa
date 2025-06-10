@@ -5,6 +5,15 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "Debug: hyperparams",
+            "type": "debugpy",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "request": "launch",
+            "module": "crsa.scripts.hyperparams",
+            "args": ["find_a1"]
+        },
+        {
             "name": "Debug: CRSA",
             "type": "debugpy",
             "console": "integratedTerminal",

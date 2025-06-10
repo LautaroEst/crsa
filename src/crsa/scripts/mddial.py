@@ -6,7 +6,7 @@ from lightning import seed_everything
 import pandas as pd
 import torch
 
-from ..src.io import init_logger, read_yaml, check_iter_args
+from ..src.io import init_logger, close_logger, read_yaml, check_iter_args
 from ..src.datasets import MDDialDataset
 from ..src.datasets.utils import Predictions
 from ..src.pragmatics import init_model
@@ -84,7 +84,7 @@ def run_pragmatic_models(predictions: Predictions, logprior: torch.Tensor, model
 
             # Log the sample index
             if (i + 1) % log_every == 0:
-                logger.info(f"Runnung model {model_name} on sample {i+1}/{len(predictions)}")
+                logger.info(f"Running model {model_name} on sample {i+1}/{len(predictions)}")
 
             # Run each turn
             turns_results = []
@@ -93,6 +93,13 @@ def run_pragmatic_models(predictions: Predictions, logprior: torch.Tensor, model
                 utt_idx = utterance["content"]
                 lit_logspk = utterance["logits"]
                 costs = torch.zeros(lit_logspk.shape[1], dtype=torch.float32)
+
+                # Log the turn number
+                if (i + 1) % log_every == 0:
+                    logger.info(f"Turn {turn}/{len(sample['utterances'])}. Speaker: {spk_name}.")
+
+                if turn == 10:
+                    print("Reached turn 10, stopping early for debugging.")
 
                 # Run the pragmatic model
                 prag_logspk, prag_loglst = model.run_turn(lit_logspk, spk_name, costs, alpha)
@@ -200,9 +207,8 @@ def setup():
         import traceback
         logger.error(f"Error running script {Path(__file__).stem}  with config {config_path.stem}:\n\n{traceback.format_exc()}")
         
-    for handler in logger.handlers:
-        handler.close()
-        logger.removeHandler(handler)
+    close_logger(logger)
+
 
 
 if __name__ == "__main__":

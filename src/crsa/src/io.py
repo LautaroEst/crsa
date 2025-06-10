@@ -6,22 +6,36 @@ import time
 import yaml
 
 
-def init_logger(name, output_dir: Path):
+def init_logger(name, output_dir: Path, log_to_console=True, log_to_file=True):
     script_logger = logging.getLogger(name)
-    console = logging.StreamHandler()
-    script_logger.addHandler(console)
-    now = time.strftime("%Y-%m-%d-%H-%M-%S")
-    file_handler = logging.FileHandler(output_dir / f"{now}.log", mode="w", encoding="utf-8")
-    file_handler.setFormatter(
-        logging.Formatter(
-            "{asctime} - {levelname} - {message}",
-            style="{",
-            datefmt="%Y-%m-%d %H:%M:%S"
+
+    if not log_to_console and not log_to_file:
+        script_logger.setLevel(logging.ERROR)
+        return script_logger
+    
+    if log_to_console:
+        console = logging.StreamHandler()
+        script_logger.addHandler(console)
+
+    if log_to_file:
+        now = time.strftime("%Y-%m-%d-%H-%M-%S")
+        file_handler = logging.FileHandler(output_dir / f"{now}.log", mode="w", encoding="utf-8")
+        file_handler.setFormatter(
+            logging.Formatter(
+                "{asctime} - {levelname} - {message}",
+                style="{",
+                datefmt="%Y-%m-%d %H:%M:%S"
+            )
         )
-    )
-    script_logger.addHandler(file_handler)
+        script_logger.addHandler(file_handler)
+
     script_logger.setLevel(logging.INFO)
     return script_logger
+
+def close_logger(logger):
+    for handler in logger.handlers:
+        handler.close()
+        logger.removeHandler(handler)
 
 
 def read_yaml(path: Path):

@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from ..src.io import init_logger, read_yaml, check_iter_args
+from ..src.io import init_logger, close_logger, read_yaml, check_iter_args
 from ..src.datasets import FindA1Dataset
 from ..src.pragmatics import init_model
 from ..src.speakers import StaticLexicon, DynamicLexicon
@@ -196,7 +196,8 @@ def main(
                 # Sample an utterance from the pragmatic speaker
                 meaning_S = meaning_A if spk_name == "A" else meaning_B
                 new_utt = model.sample_utterance(meaning_S, sampling_strategy)
-                model.update_belief_(new_utt)
+                if "crsa" in model_name:
+                    model.update_belief_(new_utt)
                 past_utterances.append({"spk_name": spk_name, "utterance": new_utt})
 
                 # Save results
@@ -263,13 +264,14 @@ def setup():
         logger.info(f"Starting script {Path(__file__).stem}  with config {config_path.stem}")
         main(**config)
         logger.info(f"Script {Path(__file__).stem}  with config {config_path.stem} finished")
+    except KeyboardInterrupt:
+        logger.info(f"Script {Path(__file__).stem}  with config {config_path.stem} interrupted by user")
     except Exception:
         import traceback
         logger.error(f"Error running script {Path(__file__).stem}  with config {config_path.stem}:\n\n{traceback.format_exc()}")
-        
-    for handler in logger.handlers:
-        handler.close()
-        logger.removeHandler(handler)
+            
+    close_logger(logger)
+
 
 
 if __name__ == "__main__":

@@ -25,8 +25,9 @@ conda activate crsa
 cd "$base_dir"
 
 # Run the scripts
+$runner crsa.scripts.hyperparams "find_a1"
 # $runner crsa.scripts.find_a1 "size=6_alpha=2.5"
-$runner crsa.scripts.mddial "llama_alpha=2.5"
+# $runner crsa.scripts.mddial "llama_alpha=2.5"
 
 # Finish
 conda deactivate
