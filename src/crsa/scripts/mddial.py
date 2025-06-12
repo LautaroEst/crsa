@@ -57,11 +57,7 @@ def run_pragmatic_models(predictions: Predictions, logprior: torch.Tensor, model
         model = init_model(model_name.split("_")[0], logprior, max_depth=max_depth, tolerance=tolerance, save_memory=save_memory)       
 
         # Iterate over samples in the dataset
-        if (predictions_dir := output_dir / f"{model_name}_predictions").exists():
-            model_predictions = Predictions.from_directory(predictions_dir)
-        else:
-            model_predictions = Predictions([], predictions_dir)
-            predictions_dir.mkdir(parents=True, exist_ok=True)
+        model_predictions = Predictions(output_dir / f"{model_name}_predictions")
 
         for i, sample in enumerate(predictions):
 
@@ -147,19 +143,19 @@ def main(
     # Initialize the dataset
     dataset = MDDialDataset(split="train")
 
-    # Initialize the LLM speaker
-    speaker = LLMSpeaker.load(model=llm)
-    speaker.distribute(accelerator="auto", precision="bf16-true")
+    # # Initialize the LLM speaker
+    # speaker = LLMSpeaker.load(model=llm)
+    # speaker.distribute(accelerator="auto", precision="bf16-true")
 
     # Predict literal speakers
-    predictions = predict(
-        speaker, 
-        dataset, 
-        log_every=log_every, 
-        logger=logger, 
-        output_dir=output_dir
-    )
-    # predictions = Predictions.from_directory(output_dir / "processed")
+    # predictions = predict(
+    #     speaker, 
+    #     dataset, 
+    #     log_every=log_every, 
+    #     logger=logger, 
+    #     output_dir=output_dir
+    # )
+    predictions = Predictions(output_dir / "processed")
 
     # Run RSA models
     run_pragmatic_models(predictions, dataset.world["logprior"], models, alpha, max_depth, tolerance, output_dir, logger, log_every, save_memory=save_memory)

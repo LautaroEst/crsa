@@ -25,7 +25,7 @@ class Listener:
         logspk = speaker.as_tensor.clone()
         prag_lst = self._update(logspk)
 
-        if self.save_memory and len(self.history) > 1:
+        if self.save_memory and len(self.history) > 0:
             self.history[-1] = prag_lst
         else:
             self.history.append(prag_lst)
@@ -41,6 +41,8 @@ class Listener:
 
     @property
     def literal_as_tensor(self):
+        if self.save_memory:
+            raise ValueError("Literal tensor is not available when save_memory is True.")
         return self.history[0]
     
     @property
@@ -94,13 +96,15 @@ class Speaker:
         prag_logspk = torch.log_softmax(self.alpha * pre_softmax, dim=1)
         prag_logspk[prag_logspk.isnan()] = -torch.inf 
 
-        if self.save_memory and len(self.history) > 1:
+        if self.save_memory and len(self.history) > 0:
             self.history[-1] = prag_logspk
         else:
             self.history.append(prag_logspk)
         
     @property
     def literal_as_tensor(self):
+        if self.save_memory:
+            raise ValueError("Literal tensor is not available when save_memory is True.")
         return self.history[0]
     
     @property
@@ -358,7 +362,10 @@ class CRSA:
             save_memory=self.save_memory
         )
         model.run(lit_logspk)
-        self.turns.append(model)
+        if self.save_memory and len(self.turns) > 0:
+            self.turns[-1] = model
+        else:
+            self.turns.append(model)
 
         return model.speaker.as_tensor, model.listener.as_tensor
 
