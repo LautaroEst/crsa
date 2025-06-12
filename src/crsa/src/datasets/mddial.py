@@ -27,9 +27,8 @@ class MDDialDataset:
         with open(self.data_dir + "disease_symptoms.txt", "r") as f:
             disease2symptoms = json.load(f)
 
-        d_count = {}
+        diseases_count = {}
         valid_data = []
-        unique_meanings_patient = []
         for i, dialog in enumerate(tqdm(data["dialogs"])):
             
             found = False
@@ -47,67 +46,28 @@ class MDDialDataset:
 
                 # Utterances
                 utterances = []
-                symptoms_in_dialog = torch.zeros(len(symptoms))
                 for t, turn in enumerate(dialog):
-                    if t == 0:
-                        for s_id, s in enumerate(symptoms):
-                            if s in turn["patient"]:
-                                symptoms_in_dialog[s_id] = 1
-                            if s in turn["doctor"]:
-                                symptom_q = s
-                    else:
-                        if turn["patient"] in ["Yes, sometimes", "I am experiencing that sometimes",
-                                               "Yes Doctor, I am feeling that as well", "Yes most of the times"]:
-                            for s_id, s in enumerate(symptoms):
-                                if s == symptom_q:
-                                    symptoms_in_dialog[s_id] = 1
-                        for s in symptoms:
-                            if s in turn["doctor"]:
-                                symptom_q = s
                     utterances.append({"speaker": "patient", "content": turn["patient"]})
                     utterances.append({"speaker": "doctor", "content": turn["doctor"]})
                 sample["utterances"] = utterances
                 
-                # Patient meanings (One-hot encoding of symptoms)
-                meaning_patient = torch.zeros(len(symptoms))
-                for s_id, s in enumerate(symptoms):
-                    if s in disease2symptoms[d]:
-                        meaning_patient[s_id] = 1
-                meaning_patient = meaning_patient * symptoms_in_dialog
-
-                if len(unique_meanings_patient) == 0:
-                    meaning_id = 0
-                    unique_meanings_patient.append(meaning_patient)
-                else:
-                    mask = (torch.vstack(unique_meanings_patient) == meaning_patient).all(dim=1)
-                    if not mask.any():
-                        # If the meaning is not already in unique_meanings_patient, add it
-                        meaning_id = len(unique_meanings_patient)
-                        unique_meanings_patient.append(meaning_patient)
-                    else:
-                        # If it exists, get the index
-                        meaning_id = mask.nonzero(as_tuple=True)[0].item()
-
-                # Keep track of the number of times each meaning appears
-                if (meaning_id, d_idx) in d_count:
-                    d_count[(meaning_id, d_idx)] += 1
-                else:
-                    d_count[(meaning_id, d_idx)] = 1
-
                 # Patient meanings    
-                sample["meaning_patient"] = torch.tensor(meaning_id)
+                sample["meaning_patient"] = torch.tensor(d_idx)
                 
                 # Doctor meanings (Always the same meaning)
-                sample["meaning_doctor"] = torch.tensor(0)    
-                
+                sample["meaning_doctor"] = torch.tensor(0)  
+
+                # Count diseases
+                if d_idx not in diseases_count:
+                    diseases_count[d_idx] = 0
+                diseases_count[d_idx] += 1  
+
                 valid_data.append(sample)
 
         
-        prior = torch.zeros((len(unique_meanings_patient), 1, len(diseases)))
-        for i, d in enumerate(diseases):
-            for j, meaning in enumerate(unique_meanings_patient):
-                if (j, i) in d_count:
-                    prior[j, 0, i] = d_count[(j, i)]
+        prior = torch.zeros((len(diseases), 1, len(diseases)))
+        for i in range(len(diseases)):
+            prior[i, 0, i] = diseases_count.get(i, 0)
         logprior = torch.log(prior / torch.sum(prior))
 
         shots_ids = [43, 1204]
@@ -117,7 +77,7 @@ class MDDialDataset:
             shots.append({
                 "idx": record["idx"],
                 "utterances": record["utterances"],
-                "meaning_patient": [symptoms[i] for i, s in enumerate(unique_meanings_patient[record["meaning_patient"].item()]) if s == 1],
+                "meaning_patient": disease2symptoms[diseases[record["meaning_patient"].item()]],
                 "meaning_doctor": record["meaning_doctor"],
                 "target": record["target"],
             })
@@ -127,10 +87,9 @@ class MDDialDataset:
             "diseases": diseases,
             "symptoms": symptoms,
             "system_prompts": {
-                "patient": [self._create_patient_prompt([symptoms[i] for i, s in enumerate(m) if s == 1], shots) for m in unique_meanings_patient],
+                "patient": [self._create_patient_prompt(disease2symptoms[d], shots) for d in diseases],
                 "doctor": [self._create_doctor_prompt(disease2symptoms, diseases, shots)],
             },
-            "unique_meanings_patient": unique_meanings_patient,
             "logprior": logprior,
         }
 
@@ -161,7 +120,7 @@ class MDDialDataset:
         )
         for example in shots:
             prompt += "--- Example: ---\n\n"
-            prompt += "You are experiencing the following symptoms:\n"
+            prompt += "You are experiencing some of the following symptoms:\n"
             for s in example["meaning_patient"]:
                 prompt += f"- {s}\n"
             prompt += "\nConversation:\n"
@@ -173,7 +132,7 @@ class MDDialDataset:
             prompt += "\n--- End of example ---\n\n"
         prompt += (
             "Now, begin a new conversation with the doctor.\n\n"
-            f"You are experiencing the following symptoms:\n"
+            f"You are experiencing some of the following symptoms:\n"
         )
         for s in patient_symptoms:
             prompt += f"- {s}\n"
