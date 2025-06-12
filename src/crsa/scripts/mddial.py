@@ -16,12 +16,7 @@ from ..src.speakers import LLMSpeaker
 
 def predict(speaker: LLMSpeaker, dataset: MDDialDataset, log_every: int = 10, logger=None, output_dir: Path = None):
 
-    if (predictions_dir := output_dir / "processed").exists():
-        predictions = Predictions.from_directory(predictions_dir)
-    else:
-        predictions = Predictions([], predictions_dir)
-        predictions_dir.mkdir(parents=True, exist_ok=True)
-
+    predictions = Predictions(output_dir / "processed")
 
     # Start processing samples
     for i, sample in enumerate(dataset.iter_samples()):

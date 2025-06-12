@@ -7,31 +7,21 @@ import pickle
 
 class Predictions:
 
-    def __init__(self, predictions_ids, output_dir: Path):
-        self.predictions_ids = predictions_ids
+    def __init__(self, output_dir: Path):
         self.output_dir = output_dir
+        self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def add(self, prediction: dict):
         if prediction["idx"] in self.predictions_ids:
             raise ValueError(f"Prediction with idx {prediction['idx']} already exists.")
-        self.predictions_ids.append(prediction["idx"])
         output_file = self.output_dir / f"sample_{prediction['idx']}.pkl"
         with open(output_file, "wb") as f:
             pickle.dump(prediction, f)
 
-    @classmethod
-    def from_directory(cls, directory: Path):
-        processed_predictions = directory.glob("sample_*.pkl")
-        if processed_predictions:
-            predictions_ids = [int(f.stem.split("_")[1]) for f in processed_predictions]
-        else:
-            predictions_ids = []
-        return cls(predictions_ids, directory)
-    
     @property
-    def ids(self):
-        return self.predictions_ids
-    
+    def predictions_ids(self):
+        return [int(f.stem.split("_")[1]) for f in self.output_dir.glob("sample_*.pkl")]
+
     def __contains__(self, prediction):
         return prediction["idx"] in self.predictions_ids
     

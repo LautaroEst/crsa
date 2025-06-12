@@ -110,7 +110,7 @@ class MDDialDataset:
                     prior[j, 0, i] = d_count[(j, i)]
         logprior = torch.log(prior / torch.sum(prior))
 
-        shots_ids = [43, 1204, 5, 300, 1788, 689]
+        shots_ids = [43, 1204]
         shots = []
         for i in shots_ids:
             record = deepcopy(valid_data[i])
