@@ -130,9 +130,9 @@ class CRSAGain:
         logspk = prag_logspk.T
         logbelief_L = self.logbelief_L.view(1,-1) if self.logbelief_L is not None else torch.zeros(1, prag_logspk.shape[0], dtype=self.logprior.dtype, device=self.logprior.device)
         logps = logbelief_L + logprior_s + logspk
-        ps = torch.exp(logps)
+        logps = logps - torch.logsumexp(logps, dim=(0,1))
         
-        cond_entropy_us = ps * logspk
+        cond_entropy_us = torch.exp(logps) * logspk
         cond_entropy_us[cond_entropy_us.isnan()] = 0.0
         cond_entropy = -torch.sum(cond_entropy_us)
         
@@ -144,13 +144,18 @@ class CRSAGain:
         logspk = prag_logspk.T.unsqueeze(2).unsqueeze(2)
         logbelief_L = self.logbelief_L.view(1, -1, 1, 1) if self.logbelief_L is not None else torch.zeros(1, logprior.shape[1], 1, 1, dtype=self.logprior.dtype, device=self.logprior.device)
         logbelief_S = self.logbelief_S.view(1, 1, -1, 1) if self.logbelief_S is not None else torch.zeros(1, 1, logprior.shape[2], 1, dtype=self.logprior.dtype, device=self.logprior.device)
-        logps = logbelief_L + logbelief_S + logprior + logspk
-        ps = torch.exp(logps)
+        logps = logbelief_L + logbelief_S + logprior + logspk # Ps(u,s,l,y)
+
+        x = (logbelief_L + logprior).squeeze()
+        x = x - torch.logsumexp(x, dim=(0,1))
+        x = torch.exp(x)
+
+        logps = logps - torch.logsumexp(logps, dim=(0, 1, 2, 3))
 
         v_l = listener.as_tensor - self.costs.view(-1, 1, 1) # V_L(u,l,y)
-        v_l = v_l.unsqueeze(1)
-
-        v_l_usly = ps * v_l
+        v_l = v_l.unsqueeze(1) # V_L(u,:,l,y)
+        
+        v_l_usly = torch.exp(logps) * v_l
         v_l_usly[v_l_usly.isnan()] = 0.0
         expected_v_l = torch.sum(v_l_usly)
         return expected_v_l
@@ -226,6 +231,7 @@ class CRSATurn:
 
             # Check for convergence
             gain = self.gain.compute_gain(self.listener, self.speaker)
+            print(f"Iteration {i+1}: Gain = {gain.item()}")
             if self.gain.get_diff() < self.tolerance:
                 break
             i += 1

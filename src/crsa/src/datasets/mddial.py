@@ -3,6 +3,7 @@ from copy import deepcopy
 import json
 
 import torch
+from tqdm import tqdm
 
 
 class MDDialDataset:
@@ -23,16 +24,21 @@ class MDDialDataset:
             diseases = [line.strip() for line in f.readlines()]
         with open(self.data_dir + "symptom.txt", "r") as f:
             symptoms = [line.strip() for line in f.readlines()]
+        with open(self.data_dir + "disease_symptoms.txt", "r") as f:
+            disease2symptoms = json.load(f)
 
+        d_count = {}
         valid_data = []
-        diseases_count = {}
-        for i, dialog in enumerate(data["dialogs"]):
+        unique_meanings_patient = []
+        for i, dialog in enumerate(tqdm(data["dialogs"])):
             
             found = False
-            for d_idx, d in enumerate(diseases):
+            d_idx = 0
+            for d in diseases:
                 if d in dialog[-1]["doctor"]:
                     found = True
                     break
+                d_idx += 1
 
             if found:
                 sample = {}
@@ -41,38 +47,77 @@ class MDDialDataset:
 
                 # Utterances
                 utterances = []
+                symptoms_in_dialog = torch.zeros(len(symptoms))
                 for t, turn in enumerate(dialog):
+                    if t == 0:
+                        for s_id, s in enumerate(symptoms):
+                            if s in turn["patient"]:
+                                symptoms_in_dialog[s_id] = 1
+                            if s in turn["doctor"]:
+                                symptom_q = s
+                    else:
+                        if turn["patient"] in ["Yes, sometimes", "I am experiencing that sometimes",
+                                               "Yes Doctor, I am feeling that as well", "Yes most of the times"]:
+                            for s_id, s in enumerate(symptoms):
+                                if s == symptom_q:
+                                    symptoms_in_dialog[s_id] = 1
+                        for s in symptoms:
+                            if s in turn["doctor"]:
+                                symptom_q = s
                     utterances.append({"speaker": "patient", "content": turn["patient"]})
                     utterances.append({"speaker": "doctor", "content": turn["doctor"]})
                 sample["utterances"] = utterances
                 
+                # Patient meanings (One-hot encoding of symptoms)
+                meaning_patient = torch.zeros(len(symptoms))
+                for s_id, s in enumerate(symptoms):
+                    if s in disease2symptoms[d]:
+                        meaning_patient[s_id] = 1
+                meaning_patient = meaning_patient * symptoms_in_dialog
+
+                if len(unique_meanings_patient) == 0:
+                    meaning_id = 0
+                    unique_meanings_patient.append(meaning_patient)
+                else:
+                    mask = (torch.vstack(unique_meanings_patient) == meaning_patient).all(dim=1)
+                    if not mask.any():
+                        # If the meaning is not already in unique_meanings_patient, add it
+                        meaning_id = len(unique_meanings_patient)
+                        unique_meanings_patient.append(meaning_patient)
+                    else:
+                        # If it exists, get the index
+                        meaning_id = mask.nonzero(as_tuple=True)[0].item()
+
+                # Keep track of the number of times each meaning appears
+                if (meaning_id, d_idx) in d_count:
+                    d_count[(meaning_id, d_idx)] += 1
+                else:
+                    d_count[(meaning_id, d_idx)] = 1
+
                 # Patient meanings    
-                sample["meaning_patient"] = torch.tensor(d_idx)
+                sample["meaning_patient"] = torch.tensor(meaning_id)
                 
                 # Doctor meanings (Always the same meaning)
-                sample["meaning_doctor"] = torch.tensor(0)  
-
-                # Count diseases
-                if d_idx not in diseases_count:
-                    diseases_count[d_idx] = 0
-                diseases_count[d_idx] += 1  
-
+                sample["meaning_doctor"] = torch.tensor(0)    
+                
                 valid_data.append(sample)
 
         
-        prior = torch.zeros((len(diseases), 1, len(diseases)))
-        for i in range(len(diseases)):
-            prior[i, 0, i] = diseases_count.get(i, 0)
+        prior = torch.zeros((len(unique_meanings_patient), 1, len(diseases)))
+        for i, d in enumerate(diseases):
+            for j, meaning in enumerate(unique_meanings_patient):
+                if (j, i) in d_count:
+                    prior[j, 0, i] = d_count[(j, i)]
         logprior = torch.log(prior / torch.sum(prior))
 
-        shots_ids = [5, 43, 1204, 864]
+        shots_ids = [43, 1204, 5, 300, 1788, 689]
         shots = []
         for i in shots_ids:
             record = deepcopy(valid_data[i])
             shots.append({
                 "idx": record["idx"],
                 "utterances": record["utterances"],
-                "meaning_patient": record["meaning_patient"],
+                "meaning_patient": [symptoms[i] for i, s in enumerate(unique_meanings_patient[record["meaning_patient"].item()]) if s == 1],
                 "meaning_doctor": record["meaning_doctor"],
                 "target": record["target"],
             })
@@ -82,78 +127,81 @@ class MDDialDataset:
             "diseases": diseases,
             "symptoms": symptoms,
             "system_prompts": {
-                "patient": [self._create_patient_prompt(d, diseases, shots) for d in diseases],
-                "doctor": [self._create_doctor_prompt(diseases, shots)],
+                "patient": [self._create_patient_prompt([symptoms[i] for i, s in enumerate(m) if s == 1], shots) for m in unique_meanings_patient],
+                "doctor": [self._create_doctor_prompt(disease2symptoms, diseases, shots)],
             },
+            "unique_meanings_patient": unique_meanings_patient,
             "logprior": logprior,
         }
 
-        return valid_data, world, shots_ids
+        return valid_data, world, shots
     
+
     def iter_samples(self):
         for idx in self.sampled_indices:
             yield self.data[idx]
+
 
     def __getitem__(self, idx):
         if idx < 0 or idx >= len(self.data):
             raise IndexError("Index out of range")
         return self.data[idx]
 
+
     def __len__(self):
         return len(self.data)
     
 
-    def _create_patient_prompt(self, meaning, diseases, shots):
+    def _create_patient_prompt(self, patient_symptoms, shots):
         prompt = (
             "You are an assistant that simulates to be a patient "
             "who has a disease and describes the symptoms to the user, "
-            "which is a medical doctor.\n\n"
+            "which is a medical doctor.\n\nBelow are examples of conversations.\n\n"
             ""
         )
         for example in shots:
-            prompt += (
-                "Here is an example of a conversation between the assitant and the user. "
-                f"You are experiencing the symptoms corresponding to {diseases[example['meaning_patient'].item()]}:\n"
-            )
+            prompt += "--- Example: ---\n\n"
+            prompt += "You are experiencing the following symptoms:\n"
+            for s in example["meaning_patient"]:
+                prompt += f"- {s}\n"
+            prompt += "\nConversation:\n"
             for utterance in example["utterances"]:
                 if utterance["speaker"] == "patient":
                     prompt += f"Assistant: {utterance['content']}\n"
                 else:
                     prompt += f"User: {utterance['content']}\n"
-            prompt += "\n"
+            prompt += "\n--- End of example ---\n\n"
         prompt += (
-            "Now, you describe your symptoms to the doctor in your own language. "
-            f"You are experiencing the symptoms corresponding to {meaning}.\n"
+            "Now, begin a new conversation with the doctor.\n\n"
+            f"You are experiencing the following symptoms:\n"
         )
+        for s in patient_symptoms:
+            prompt += f"- {s}\n"
+        prompt += "\nBegin the conversation by describing some of your symptoms to the doctor.\n"
+
         return prompt
 
-    def _create_doctor_prompt(self, diseases, shots):
+    def _create_doctor_prompt(self, disease2symptoms, diseases, shots):
         prompt = (
-            "You are an assistant that simulates to be a doctor "
-            "who is diagnosing a patient based on the symptoms that he or she describes. "
-            "You can ask questions to the patient about additional symptoms, but ultimately, "
-            "you have provide a diagnosis based on the symptoms described by the patient.\n\n"
-        ) # Agregar los sintomas y la posibilidad de que pregunte por síntomas adicionales. 
+            "You are an assistant simulating a medical doctor interacting with a patient. "
+            "The patient will describe their symptoms gradually in a conversation. "
+            "Your task is to ask relevant questions to identify which disease the patient most likely has. "
+            "You have access to the following mapping between diseases and their typical symptoms:"
+            "\n\n--- Disease-Symptom Mapping ---\n\n"
+        )
         for i, disease in enumerate(diseases):
-            prompt += f"{i + 1}. {disease}\n"
-        
+            prompt += f"- {disease}: {', '.join(disease2symptoms[disease])}.\n"
+        prompt += "\n--- End of Disease-Symptom Mapping ---\n\n"
+        prompt += "Below are examples of conversations with patients.\n\n"
         for example in shots:
             prompt += (
-                "Here is an example of a conversation "
-                "between you and the patient. "
+                "--- Example: ---\n\n"
             )
             for utterance in example["utterances"]:
                 if utterance["speaker"] == "patient":
                     prompt += f"User: {utterance['content']}\n"
                 else:
                     prompt += f"Assistant: {utterance['content']}\n"
-        prompt += (
-            "Now, you are given a conversation with a patient. "
-            "The possible diseases are:\n"
-        )
-        for i, disease in enumerate(diseases):
-            prompt += f"{i + 1}. {disease}\n"
-        prompt += (
-            "You need to diagnose the patient based on the symptoms described by the patient.\n"
-        )
+            prompt += "\n--- End of example ---\n\n"
+        prompt += "Now, begin a new conversation. The patient will describe symptoms gradually. Use the disease-symptom mapping to guide your questions.\n"
         return prompt

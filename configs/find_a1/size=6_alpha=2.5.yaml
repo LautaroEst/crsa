@@ -8,8 +8,8 @@ models:
   - "yrsa_wm" 
   - "yrsa-literal" 
   - "yrsa-literal_wm" 
-  - "crsa-literal"
-  - "crsa-literal_wm"
+  # - "crsa-literal"
+  # - "crsa-literal_wm"
   - "prior"
 
 alpha: 2.5

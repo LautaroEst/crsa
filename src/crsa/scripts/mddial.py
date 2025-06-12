@@ -98,9 +98,6 @@ def run_pragmatic_models(predictions: Predictions, logprior: torch.Tensor, model
                 if (i + 1) % log_every == 0:
                     logger.info(f"Turn {turn}/{len(sample['utterances'])}. Speaker: {spk_name}.")
 
-                if turn == 10:
-                    print("Reached turn 10, stopping early for debugging.")
-
                 # Run the pragmatic model
                 prag_logspk, prag_loglst = model.run_turn(lit_logspk, spk_name, costs, alpha)
                 model.update_belief_(utt_idx)
@@ -155,19 +152,19 @@ def main(
     # Initialize the dataset
     dataset = MDDialDataset(split="train")
 
-    # # Initialize the LLM speaker
-    # speaker = LLMSpeaker.load(model=llm)
-    # speaker.distribute(accelerator="auto", precision="bf16-true")
+    # Initialize the LLM speaker
+    speaker = LLMSpeaker.load(model=llm)
+    speaker.distribute(accelerator="auto", precision="bf16-true")
 
-    # # Predict literal speakers
-    # predictions = predict(
-    #     speaker, 
-    #     dataset, 
-    #     log_every=log_every, 
-    #     logger=logger, 
-    #     output_dir=output_dir
-    # )
-    predictions = Predictions.from_directory(output_dir / "processed")
+    # Predict literal speakers
+    predictions = predict(
+        speaker, 
+        dataset, 
+        log_every=log_every, 
+        logger=logger, 
+        output_dir=output_dir
+    )
+    # predictions = Predictions.from_directory(output_dir / "processed")
 
     # Run RSA models
     run_pragmatic_models(predictions, dataset.world["logprior"], models, alpha, max_depth, tolerance, output_dir, logger, log_every, save_memory=save_memory)
