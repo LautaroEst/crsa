@@ -2,7 +2,7 @@
 
 
 from pathlib import Path
-import pickle
+import torch
 
 
 class Predictions:
@@ -14,13 +14,12 @@ class Predictions:
     def add(self, prediction: dict):
         if prediction["idx"] in self.predictions_ids:
             raise ValueError(f"Prediction with idx {prediction['idx']} already exists.")
-        output_file = self.output_dir / f"sample_{prediction['idx']}.pkl"
-        with open(output_file, "wb") as f:
-            pickle.dump(prediction, f)
+        output_file = self.output_dir / f"sample_{prediction['idx']}.pt"
+        torch.save(prediction, output_file)
 
     @property
     def predictions_ids(self):
-        return [int(f.stem.split("_")[1]) for f in self.output_dir.glob("sample_*.pkl")]
+        return [int(f.stem.split("_")[1]) for f in self.output_dir.glob("sample_*.pt")]
 
     def __contains__(self, prediction):
         return prediction["idx"] in self.predictions_ids
@@ -30,8 +29,7 @@ class Predictions:
     
     def __iter__(self):
         for prediction_id in self.predictions_ids:
-            output_file = self.output_dir / f"sample_{prediction_id}.pkl"
-            with open(output_file, "rb") as f:
-                yield pickle.load(f)
+            output_file = self.output_dir / f"sample_{prediction_id}.pt"
+            yield torch.load(output_file, weights_only=False)
 
     

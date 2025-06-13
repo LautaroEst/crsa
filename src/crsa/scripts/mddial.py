@@ -45,6 +45,23 @@ def predict(speaker: LLMSpeaker, dataset: MDDialDataset, log_every: int = 10, lo
         predictions.add(prediction)
 
     return predictions
+
+
+def plot_results(output_dir: Path, models: List[str]):
+    results = []
+    for model_name in models:
+        model_predictions = Predictions(output_dir / f"{model_name}_predictions")
+        for sample in model_predictions:
+            for turn in sample["turns"]:
+                results.append({
+                    "model": model_name,
+                    "idx": sample["idx"],
+                    "turn": turn["turn"],
+                    "speaker": turn["speaker"],
+                    "nll_spk": -turn["prag_spk_dist"][turn["utterance"]].item(),
+                    "nll_lst": -turn["prag_lst_dist"][sample["target"]].item()
+                })
+    df = pd.DataFrame(results).sort_values(by=["model", "idx", "turn"])
         
 
 def run_pragmatic_models(predictions: Predictions, logprior: torch.Tensor, models: List[str], alpha: float, max_depth: Union[int, Literal['inf']], tolerance: float, output_dir: Path, logger=None, log_every: int = 10, save_memory: bool = True):
@@ -78,7 +95,13 @@ def run_pragmatic_models(predictions: Predictions, logprior: torch.Tensor, model
                 logger.info(f"Running model {model_name} on sample {i+1}/{len(predictions)}")
 
             # Run each turn
-            turns_results = []
+            utt_indices = []
+            spk_names = []
+            spk_dists = []
+            lst_dists = []
+            logbeliefs_A = []
+            logbeliefs_B = []
+            iter_nums = []
             for turn, utterance in enumerate(sample["utterances"], start=1):
                 spk_name = "A" if utterance["speaker"] == "patient" else "B"
                 utt_idx = utterance["content"]
@@ -94,29 +117,29 @@ def run_pragmatic_models(predictions: Predictions, logprior: torch.Tensor, model
                 model.update_belief_(utt_idx)
 
                 # Save results
-                turns_results.append({
-                    "turn": turn,
-                    "utterance": utt_idx,
-                    "speaker": spk_name,
-                    "prag_spk_dist": prag_logspk[meaning_patient if spk_name == "A" else meaning_doctor, :],
-                    "prag_lst_dist": prag_loglst[utt_idx, meaning_doctor if spk_name == "A" else meaning_patient, :],
-                    "logbelief_A": model.logbeliefs[-1]["A"] if model_name == "crsa" else None,
-                    "logbelief_B": model.logbeliefs[-1]["B"] if model_name == "crsa" else None,
-                    "iter_num": model.turns[-1].iter_num,
-                })
+                utt_indices.append(utt_idx)
+                spk_names.append(spk_name)
+                spk_dists.append(prag_logspk[meaning_patient if spk_name == "A" else meaning_doctor, :].view(-1,1))
+                lst_dists.append(prag_loglst[utt_idx, meaning_doctor if spk_name == "A" else meaning_patient, :].view(-1,1))
+                logbeliefs_A.append(model.logbeliefs[-1]["A"].view(-1,1) if model_name == "crsa" else None)
+                logbeliefs_B.append(model.logbeliefs[-1]["B"].view(-1,1) if model_name == "crsa" else None)
+                iter_nums.append(model.turns[-1].iter_num)
             
             # Save predictions for the model
             model_predictions.add({
                 "model": model_name,
-                "idx": sample["idx"],
-                "meaning_A": meaning_patient,
-                "meaning_B": meaning_doctor,
-                "target": target,
-                "turns": turns_results,
+                "idx": sample["idx"].item(),
+                "meaning_A": meaning_patient.item(),
+                "meaning_B": meaning_doctor.item(),
+                "target": target.item(),
+                "utt_indices": torch.hstack(utt_indices),
+                "spk_names": spk_names,
+                "spk_dists": torch.hstack(spk_dists),
+                "lst_dists": torch.hstack(lst_dists),
+                "logbeliefs_A": torch.hstack(logbeliefs_A) if model_name == "crsa" else None,
+                "logbeliefs_B": torch.hstack(logbeliefs_B) if model_name == "crsa" else None,
+                "iter_nums": torch.tensor(iter_nums),
             })
-
-    # TODO: Show results
-
 
 
 def main(
@@ -160,7 +183,7 @@ def main(
     # Run RSA models
     run_pragmatic_models(predictions, dataset.world["logprior"], models, alpha, max_depth, tolerance, output_dir, logger, log_every, save_memory=save_memory)
 
-
+    # plot_results(output_dir, models)
 
 
 def setup():
