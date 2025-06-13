@@ -132,7 +132,7 @@ def run_pragmatic_models(predictions: Predictions, logprior: torch.Tensor, model
                 "meaning_A": meaning_patient.item(),
                 "meaning_B": meaning_doctor.item(),
                 "target": target.item(),
-                "utt_indices": torch.hstack(utt_indices),
+                "utt_indices": torch.tensor(utt_indices),
                 "spk_names": spk_names,
                 "spk_dists": torch.hstack(spk_dists),
                 "lst_dists": torch.hstack(lst_dists),
