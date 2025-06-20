@@ -157,8 +157,11 @@ class YRSAGain:
     
     def get_diff(self):
         if len(self.gain_history) < 2:
-            return float("inf")
-        return self.gain_history[-1] - self.gain_history[-2] / abs(self.gain_history[-2])
+            return torch.inf
+        elif self.gain_history[-1] - self.gain_history[-2] == 0: 
+            return torch.tensor(0.)
+        else:
+            return self.gain_history[-1] - self.gain_history[-2] / abs(self.gain_history[-2])
 
 
 
