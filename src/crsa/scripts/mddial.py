@@ -120,7 +120,8 @@ def run_pragmatic_models(predictions: Predictions, models: List[str], alpha: flo
 
                 # Run the pragmatic model
                 prag_logspk, prag_loglst = model.run_turn(lit_logspk, spk_name, costs, alpha)
-                model.update_belief_(utt_idx)
+                if model_name == "crsa":
+                    model.update_belief_(utt_idx)
 
                 # Save results
                 utt_indices.append(utt_idx)
