@@ -39,10 +39,6 @@ def predict(speaker: LLMSpeaker, dataset: MDDialDataset, log_every: int = 10, lo
             "meaning_doctor": sample["meaning_doctor"],
             "target": sample["target"],
             "utterances": utterances,
-            "system_prompts": sample["system_prompts"],
-            "logprior": sample["logprior"],
-            "original_meaning_patient": sample["original_meaning_patient"],
-            "original_meaning_doctor": sample["original_meaning_doctor"],
         }
 
         # Update computed predictions
@@ -68,30 +64,28 @@ def plot_results(output_dir: Path, models: List[str]):
     df = pd.DataFrame(results).sort_values(by=["model", "idx", "turn"])
         
 
-def run_pragmatic_models(predictions: Predictions, models: List[str], alpha: float, max_depth: Union[int, Literal['inf']], tolerance: float, output_dir: Path, logger=None, log_every: int = 10, save_memory: bool = True):
+def run_pragmatic_models(predictions: Predictions, logprior: torch.Tensor, models: List[str], alpha: float, max_depth: Union[int, Literal['inf']], tolerance: float, output_dir: Path, logger=None, log_every: int = 10, save_memory: bool = True):
 
-    model_predictions = {model_name: Predictions(output_dir / f"{model_name}_predictions") for model_name in models}
+    for model_name in models:
 
-    # Iterate over samples in the dataset
-    for i, sample in enumerate(predictions):
+        logger.info(f"Running model {model_name}")
 
-        if all(sample in model_predictions[model_name] for model_name in models):
-            # If all models have already processed this sample, skip it
-            logger.info(f"Sample {sample['idx']} already processed by model {model_name}. Skipping.")
-            continue
+        # Init pragmatic model
+        model = init_model(model_name.split("_")[0], logprior, max_depth=max_depth, tolerance=tolerance, save_memory=save_memory)       
 
-        # Get the meanings and target
-        meaning_patient = sample["meaning_patient"]
-        meaning_doctor = sample["meaning_doctor"]
-        target = sample["target"]
+        # Iterate over samples in the dataset
+        model_predictions = Predictions(output_dir / f"{model_name}_predictions")
 
-        for model_name in models:
+        for i, sample in enumerate(predictions):
 
-            if sample in model_predictions[model_name]:
-                continue # Skip if this sample has already been processed by the model
+            if sample in model_predictions:
+                logger.info(f"Sample {sample['idx']} already processed by model {model_name}. Skipping.")
+                continue
 
-            # Init pragmatic model
-            model = init_model(model_name.split("_")[0], sample["logprior"], max_depth=max_depth, tolerance=tolerance, save_memory=save_memory)       
+            # Get the meanings and target
+            meaning_patient = sample["meaning_patient"]
+            meaning_doctor = sample["meaning_doctor"]
+            target = sample["target"]
 
             # Compute the LL of each utterance
             model.reset()
@@ -132,7 +126,7 @@ def run_pragmatic_models(predictions: Predictions, models: List[str], alpha: flo
                 iter_nums.append(model.turns[-1].iter_num)
             
             # Save predictions for the model
-            model_predictions[model_name].add({
+            model_predictions.add({
                 "model": model_name,
                 "idx": sample["idx"].item(),
                 "meaning_A": meaning_patient.item(),
@@ -172,19 +166,19 @@ def main(
     # Initialize the dataset
     dataset = MDDialDataset(split="train")
 
-    # Initialize the LLM speaker
-    speaker = LLMSpeaker.load(model=llm)
-    speaker.distribute(accelerator="auto", precision="bf16-true")
+    # # Initialize the LLM speaker
+    # speaker = LLMSpeaker.load(model=llm)
+    # speaker.distribute(accelerator="auto", precision="bf16-true")
 
     # Predict literal speakers
-    predictions = predict(
-        speaker, 
-        dataset, 
-        log_every=log_every, 
-        logger=logger, 
-        output_dir=output_dir
-    )
-    # predictions = Predictions(output_dir / "processed")
+    # predictions = predict(
+    #     speaker, 
+    #     dataset, 
+    #     log_every=log_every, 
+    #     logger=logger, 
+    #     output_dir=output_dir
+    # )
+    predictions = Predictions(output_dir / "processed")
 
     # Run RSA models
     run_pragmatic_models(predictions, dataset.world["logprior"], models, alpha, max_depth, tolerance, output_dir, logger, log_every, save_memory=save_memory)

@@ -5,21 +5,19 @@ import json
 import torch
 from tqdm import tqdm
 
-from ..utils import cosine_similarity
+
+
 
 
 class MDDialDataset:
 
     data_dir = "data/mddial/"
 
-    def __init__(self, split="train", n_patient_distractors=1):
+    def __init__(self, split="train"):
         if split not in ["train", "test"]:
             raise ValueError("split must be either 'train' or 'test'")
         self.data, self.world, self.shots = self._load_data(f"{split}.json")
         self.sampled_indices = torch.randperm(len(self.data))
-        if n_patient_distractors < 1 or n_patient_distractors > len(self.world["unique_meanings_patient"]):
-            raise ValueError("n_distrctactors must be at least 1")
-        self.n_patient_distractors = n_patient_distractors
 
     def _load_data(self, filename):
         with open(self.data_dir + filename, "r") as f:
@@ -113,6 +111,7 @@ class MDDialDataset:
             for j, meaning in enumerate(unique_meanings_patient):
                 if (j, i) in d_count:
                     prior[j, 0, i] = d_count[(j, i)]
+        logprior = torch.log(prior / torch.sum(prior))
 
         shots_ids = [43, 1204]
         shots = []
@@ -135,41 +134,15 @@ class MDDialDataset:
                 "doctor": [self._create_doctor_prompt(disease2symptoms, diseases, shots)],
             },
             "unique_meanings_patient": unique_meanings_patient,
-            "prior": prior,
+            "logprior": logprior,
         }
 
         return valid_data, world, shots
     
 
     def iter_samples(self):
-        unique_meanings = torch.vstack(self.world["unique_meanings_patient"]) # (n_meanings, r)
-        n_meanings = unique_meanings.shape[0]
-        n_distractors = self.n_patient_distractors
-        for idx in self.sampled_indices[:2]:
-            sample = self.data[idx]
-            meaning_patient = sample["meaning_patient"].item()  # Get the meaning index
-            meaning_patient_vec = unique_meanings[meaning_patient,:] # (r,)
-
-            # Construct distractors
-            similarities = cosine_similarity(unique_meanings, meaning_patient_vec) # (m,)
-            similarities = similarities / similarities.sum()  # Normalize to create a probability distribution
-            indices = torch.multinomial(similarities, num_samples=n_meanings, replacement=False)
-            distractors = indices[:n_distractors+1]  # Get the first n_distractors indices
-            if meaning_patient not in distractors: # Ensure the selected meaning is included in the distractors
-                distractors = torch.cat((distractors[:n_distractors], torch.tensor([meaning_patient])))
-            distractors = distractors[torch.randperm(len(distractors))]  # Shuffle the distractors
-
-            sample["system_prompts"] = {
-                "patient": [self.world["system_prompts"]["patient"][i] for i in distractors.tolist()],
-                "doctor": self.world["system_prompts"]["doctor"]
-            }
-            prior = self.world["prior"][distractors, :, :]
-            sample["logprior"] = torch.log(prior / prior.sum())
-            sample["meaning_patient"] = torch.tensor(distractors.tolist().index(sample["meaning_patient"].item()))
-            sample["original_meaning_patient"] = sample["meaning_patient"].item()  # Store the original meaning index
-            sample["original_meaning_doctor"] = sample["meaning_doctor"].item()  # Store the original meaning index
-
-            yield sample
+        for idx in self.sampled_indices:
+            yield self.data[idx]
 
 
     def __getitem__(self, idx):
@@ -191,7 +164,7 @@ class MDDialDataset:
         )
         for example in shots:
             prompt += "--- Example: ---\n\n"
-            prompt += "You are experiencing the following symptoms:\n"
+            prompt += "You are experiencing some of the following symptoms:\n"
             for s in example["meaning_patient"]:
                 prompt += f"- {s}\n"
             prompt += "\nConversation:\n"
@@ -203,7 +176,7 @@ class MDDialDataset:
             prompt += "\n--- End of example ---\n\n"
         prompt += (
             "Now, begin a new conversation with the doctor.\n\n"
-            f"You are experiencing the following symptoms:\n"
+            f"You are experiencing some of the following symptoms:\n"
         )
         for s in patient_symptoms:
             prompt += f"- {s}\n"
@@ -235,3 +208,89 @@ class MDDialDataset:
             prompt += "\n--- End of example ---\n\n"
         prompt += "Now, begin a new conversation. The patient will describe symptoms gradually. Use the disease-symptom mapping to guide your questions.\n"
         return prompt
+
+from itertools import chain, combinations
+
+def powerset(iterable):
+    "powerset([1,2,3]) --> () (1,) (2,) (3,) (1,2) (1,3) (2,3) (1,2,3)"
+    s = list(iterable)
+    for i, subset in enumerate(chain.from_iterable(combinations(s, r) for r in range(len(s)+1))):
+        if i == 0:
+            continue
+        yield subset
+
+def reduce_vocab(X, V):
+    """
+    X: lista de sets de enteros, cada set es un ejemplo no ordenado.
+    V: set de enteros, vocabulario actual.
+
+    Devuelve (X_new, V_new) tras combinar recursivamente las parejas
+    más frecuentes (frecuencia >= 2).
+    """
+    from collections import Counter
+    X_new = [set(x) for x in X]   # copia de X
+    V_new = set(V)                # copia de V
+
+    # función auxiliar: generar todas las parejas no ordenadas de un conjunto
+    def pares_de(x):
+        lst = sorted(x)
+        for i in range(len(lst)):
+            for j in range(i+1, len(lst)):
+                yield (lst[i], lst[j])
+
+    # bucle principal
+    while True:
+        # 1. contar todas las parejas
+        cnt = Counter()
+        for x in X_new:
+            cnt.update(pares_de(x))
+
+        # 2. seleccionar pareja con mayor freq ≥ 2
+        pares_freq = [(pares, f) for pares, f in cnt.items() if f >= 2]
+        if not pares_freq:
+            break
+        # ordenamos para elegir la de mayor frecuencia
+        pares_freq.sort(key=lambda pf: pf[1], reverse=True)
+        (a, b), freq = pares_freq[0]
+
+        # 3. asignar nuevo símbolo (el siguiente entero que no esté en V_new)
+        nuevo = max(V_new) + 1
+
+        # 4. sustituir en X_new
+        for x in X_new:
+            if a in x and b in x:
+                x.discard(a)
+                x.discard(b)
+                x.add(nuevo)
+
+        # 5. actualizar vocabulario
+        V_new.add(nuevo)
+
+    return X_new, V_new
+
+def main():
+    # Ejemplo:
+    dataset = MDDialDataset(split="train")
+    meanings = torch.vstack(dataset.world["unique_meanings_patient"])
+    X = [
+        set(torch.arange(meanings.shape[1])[meanings[i,:] == 1].tolist()) for i in range(meanings.shape[0])
+    ]
+    V = set(range(meanings.shape[1]))
+    Xr, Vr = reduce_vocab(X, V)
+    meanings_r = torch.zeros((len(Xr), len(Vr)))
+    for i, x in enumerate(Xr):
+        for v in x:
+            meanings_r[i, v] = 1
+    meanings_r = meanings_r[:,meanings_r.sum(dim=0) > 0]
+    import pdb; pdb.set_trace()
+    print("Original meanings shape:", meanings.shape)
+    print("Reduced meanings shape:", meanings_r.shape)
+    # print("X_new =\n", Xr)
+    # print()
+    # print("V_new =\n", Vr)
+                
+
+    
+
+if __name__ == "__main__":
+    main()

@@ -235,7 +235,6 @@ class CRSATurn:
 
             # Check for convergence
             gain = self.gain.compute_gain(self.listener, self.speaker)
-            print(f"Iteration {i+1}: Gain = {gain.item()}")
             if self.gain.get_diff() < self.tolerance:
                 break
             i += 1
