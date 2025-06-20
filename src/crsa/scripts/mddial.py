@@ -29,7 +29,7 @@ def predict(speaker: LLMSpeaker, dataset: MDDialDataset, log_every: int = 10, lo
 
         utterances = speaker.get_dialog_speakers(
             sample["utterances"],
-            dataset.world["system_prompts"],
+            sample["system_prompts"],
             dataset.world["speakers"]
         )
                 
@@ -151,6 +151,7 @@ def run_pragmatic_models(predictions: Predictions, models: List[str], alpha: flo
 def main(
     llm: str = "Llama-3.2-1B-Instruct",
     models: List[str] = ["crsa"],
+    n_distractors: int = 1,
     alpha: float = 1.0,
     max_depth: Union[int,Literal['inf']] = None,
     tolerance: float = None,
@@ -170,7 +171,7 @@ def main(
     seed_everything(seed, verbose=False)
 
     # Initialize the dataset
-    dataset = MDDialDataset(split="train")
+    dataset = MDDialDataset(split="train", n_patient_distractors=n_distractors)
 
     # Initialize the LLM speaker
     speaker = LLMSpeaker.load(model=llm)
@@ -179,7 +180,7 @@ def main(
     # Predict literal speakers
     predictions = predict(
         speaker, 
-        dataset, 
+        dataset,
         log_every=log_every, 
         logger=logger, 
         output_dir=output_dir
@@ -187,7 +188,7 @@ def main(
     # predictions = Predictions(output_dir / "processed")
 
     # Run RSA models
-    run_pragmatic_models(predictions, dataset.world["logprior"], models, alpha, max_depth, tolerance, output_dir, logger, log_every, save_memory=save_memory)
+    run_pragmatic_models(predictions, models, alpha, max_depth, tolerance, output_dir, logger, log_every, save_memory=save_memory)
 
     # plot_results(output_dir, models)
 
