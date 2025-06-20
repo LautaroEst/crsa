@@ -145,7 +145,7 @@ class MDDialDataset:
         unique_meanings = torch.vstack(self.world["unique_meanings_patient"]) # (n_meanings, r)
         n_meanings = unique_meanings.shape[0]
         n_distractors = self.n_patient_distractors
-        for idx in self.sampled_indices[:2]:
+        for idx in self.sampled_indices[:100]:
             sample = self.data[idx]
             meaning_patient = sample["meaning_patient"].item()  # Get the meaning index
             meaning_patient_vec = unique_meanings[meaning_patient,:] # (r,)
