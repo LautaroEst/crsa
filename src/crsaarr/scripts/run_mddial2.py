@@ -78,9 +78,12 @@ def run_llm(
                 "true_utt": true_ending_idx,
             })
 
+        category_prompt, endings = dataset.create_category_prompt_from_dialog(sample["utterances"], sample["symptoms"])
+        category_distribution = llm.predict(category_prompt, endings)
         predictions.add({
             "idx": sample["idx"],
             "disease": sample["disease"],
+            "category_distribution": category_distribution,
             "turns": turns_data,
         })
 
@@ -136,17 +139,14 @@ def run_rsa(models, alpha, max_depth, tolerance, output_dir: Path, logger: loggi
     world = dataset.world
 
     # Load the data
-    with open(output_dir / "lexicon_data_part.pkl", "rb") as f:
-        df_lex = pd.DataFrame(pickle.load(f)).set_index(["sample_id", "turn"]).sort_index()
-    with open(output_dir / "categories_data_part.pkl", "rb") as f:
-        df_cat = pd.DataFrame(pickle.load(f)).set_index(["sample_id"]).sort_index()
+    predictions = Predictions(output_dir / "predictions")
    
     results = []
     alpha, max_depth, tolerance = check_iter_args(alpha, max_depth, tolerance)
     for model_name in models:
         model = init_model(
             model_name,
-            meanings_A=world["symptoms"],
+            meanings_A=world["diseases"],
             meanings_B=["You are a doctor"],
             categories=world["diseases"],
             prior=world["prior"],
@@ -157,31 +157,39 @@ def run_rsa(models, alpha, max_depth, tolerance, output_dir: Path, logger: loggi
         logger.info(f"Running {model_name} with alpha={alpha}, max_depth={max_depth}, tolerance={tolerance}")
         # Run the model for each sample
         for i, sample in enumerate(dataset.iter_samples()):
-            if sample["dialog_id"] not in df_lex.index.get_level_values(0):
+            if sample not in predictions:
                 continue
-            model.reset(sample["symptoms_id"], "You are a doctor")
-            for (_, turn), (utt, speaker, log_lexicon) in df_lex.loc[(sample["dialog_id"], slice(None)), :].iterrows():
+            sample_data = predictions[sample["idx"]]
+            model.reset(sample["disease"], "You are a doctor")
+            # for (_, turn), (utt, speaker, log_lexicon) in df_lex.loc[(sample["dialog_id"], slice(None)), :].iterrows():
+            for turn_data in sample_data["turns"]:
+                turn = turn_data["turn"]
+                speaker = turn_data["speaker"]
+                speaker_logprob = turn_data["speaker_logprob"]
+                true_utt = world[f"{speaker}_utterances"][turn_data["true_utt"]]
                 utterances = world[f"{speaker}_utterances"]
-                model.run_turn(utt, log_lexicon=log_lexicon, utterances=utterances, speaker="A" if speaker == "patient" else "B")
+                model.run_turn(true_utt, log_lexicon=speaker_logprob, utterances=utterances, speaker="A" if speaker == "patient" else "B")
                 results.append({
                     "model_name": model_name,
                     "alpha": alpha,
-                    "sample_id": sample["dialog_id"],
-                    "meaning_A": sample["symptoms_id"],
+                    "sample_id": sample["idx"],
+                    "meaning_A": world["diseases"][sample["disease"]],
                     "meaning_B": "You are a doctor",
                     "turn": turn,
                     "sampled_utt": model.sample_utterance("A" if speaker == "patient" else "B"),
-                    "true_utt": utt,
-                    "true_utt_idx": utterances.index(utt),
+                    "true_utt": true_utt,
+                    "true_utt_idx": utterances.index(true_utt),
                     "speaker": speaker,
                     "speaker_dist": model.past_speaker_dist[-1],
                     "lexicon_dist": model.past_lexicon_dist[-1],
-                    "category_idx": world["diseases"].index(df_cat.loc[sample["dialog_id"], "disease"]),
-                    "category_distribution": df_cat.loc[sample["dialog_id"], "category_dist"],
+                    "category_idx": sample["disease"],
+                    "category_distribution": sample["category_distribution"],
                     "listener_dist": model.get_category_distribution(),
                     "belief_A": model.belief_A if model_name == "crsa" else None,
                     "belief_B": model.belief_B if model_name == "crsa" else None,
                 })
+            import pdb; pdb.set_trace()
+
     
     # Concatenate all results
     all_results = pd.DataFrame(results)
@@ -252,7 +260,7 @@ def main(
     # Set random seed for reproducibility
     np.random.seed(seed)
 
-    run_llm(base_model, output_dir, logger)
+    # run_llm(base_model, output_dir, logger)
 
     results = run_rsa(models, alpha=alpha, max_depth=max_depth, tolerance=tolerance, output_dir=output_dir, logger=logger)
     
@@ -279,7 +287,6 @@ def parse_args():
     parser.add_argument("--alpha", type=float, help="Alpha to run", default=1.0)
     parser.add_argument("--max_depth", type=int_or_inf, help="Max depth to run CRSA with", default=None)
     parser.add_argument("--tolerance", type=float, help="Tolerance to run", default=0.01)
-    parser.add_argument("--save_every", type=int, help="Save every N samples", default=100)
     parser.add_argument("--seed", type=int, help="Seed to run", default=None)
     args = parser.parse_args()
 
@@ -294,7 +301,6 @@ def parse_args():
     main_args = {
         "base_model": args.base_model,
         "models": args.models,
-        "save_every": args.save_every,
         "alpha": args.alpha,
         "max_depth": args.max_depth,
         "tolerance": args.tolerance,

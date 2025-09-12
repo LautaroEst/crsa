@@ -158,6 +158,9 @@ class MDDialDataset:
             "diseases": diseases,
             "symptoms": symptoms,
             "disease2symptoms": np.stack([disease2symptoms[disease] for disease in diseases], axis=0),
+            "prior": np.expand_dims(np.eye(len(diseases)) / len(diseases), axis=1),  # Uniform prior
+            "doctor_utterances": deepcopy(symptoms),  # Doctor can ask about any symptom
+            "patient_utterances": ["yes", "no"],  # Patient can only answer yes or no
         }
 
         shots = []
@@ -307,6 +310,29 @@ class MDDialDataset:
             "you have provide a diagnosis based on the symptoms described by the patient.\n"
         )
         return system_prompt
+    
+    def create_category_prompt_from_dialog(self, utterances, symptoms):
+        messages = [{"role": "system", "content": self._create_patient_system_prompt(symptoms)}]
+        for utterance in utterances[:-1]:
+            if utterance["speaker"] == "patient":
+                messages.append({"role": "assistant", "content": utterance["content"]})
+            else:
+                messages.append({"role": "user", "content": utterance["content"]})
+        category_prompt = self.prompt_style.apply(messages)
+        
+        if utterances[-1]["speaker"] != "doctor":
+            raise ValueError("The last utterance must be from the doctor.")
+        last_utterance = utterances[-1]["content"]
+        for disease in self.world["diseases"]:
+            if " " + disease in last_utterance:
+                last_utterance = last_utterance.replace(disease, "{disease}")
+                break
+        endings = [
+            self.prompt_style.apply([
+                {"role": "user", "content": last_utterance.format(disease=disease)}
+            ]) for disease in self.world["diseases"]
+        ]
+        return category_prompt, endings
 
             
     

@@ -53,3 +53,9 @@ class Predictions:
         for prediction_id in self.predictions_ids:
             output_file = self.output_dir / f"sample_{prediction_id}.npy"
             yield np.load(output_file, allow_pickle=True).item()
+
+    def __getitem__(self, idx):
+        if idx not in self.predictions_ids:
+            raise KeyError(f"Prediction with idx {idx} does not exist.")
+        output_file = self.output_dir / f"sample_{idx}.npy"
+        return np.load(output_file, allow_pickle=True).item()

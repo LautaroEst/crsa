@@ -14,7 +14,7 @@ conda activate crsa
 
 base_model="meta-llama/Llama-3.2-1B-Instruct"
 # base_model="EleutherAI/pythia-70m"
-python -m crsaarr.scripts.run_mddial \
+python -m crsaarr.scripts.run_mddial2 \
     --base_model $base_model \
     --models "crsa" "rsa" \
     --alpha 2.5 \
