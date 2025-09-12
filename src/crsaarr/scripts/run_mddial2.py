@@ -12,9 +12,9 @@ import matplotlib.pyplot as plt
 from scipy.special import log_softmax, softmax
 
 from ..src.llm_models import LLM, LLMCRSA, LLMRSA, LLMLiteral, ZERO
-from ..src.datasets import MDDialDataset
-from ..src.utils import init_logger
+from ..src.utils import init_logger, Predictions
 from ..src.evaluate import compute_metric
+from ..src.datasets.mddial2 import MDDialDataset
 
 
 model2config = {
@@ -31,88 +31,58 @@ model2config = {
 
 def run_llm(
     base_model: str = "meta-llama/Llama-3.2-1B-Instruct",
-    save_every: int = 100,
     output_dir: Path = Path("outputs"),
     logger: logging.Logger = None,
 ):
-
-    if (output_dir / "lexicon_data.pkl").exists() and (output_dir / "categories_data.pkl").exists():
-        logger.info("Model already run, skipping...")
-        return
-
-    # Initialize the model
+    
+    # Init model
     logger.info(f"Loading model {base_model}")
-    model = LLM.load(base_model)
-    model.distribute(accelerator="auto", precision="bf16-true")
+    llm = LLM.load(base_model)
+    llm.distribute(accelerator="auto", precision="bf16-true")
 
     # Init dataset
-    dataset = MDDialDataset(prompt_style=model.prompt_style, split="train")
-    world = dataset.world
+    dataset = MDDialDataset(prompt_style=llm.prompt_style, split="train")
+    
+    predictions = Predictions(output_dir / "predictions")
+    for sample in dataset.iter_samples():
 
-    if (output_dir / "lexicon_data_part.pkl").exists() and (output_dir / "categories_data_part.pkl").exists():
-        with open(output_dir / "lexicon_data_part.pkl", "rb") as f:
-            lexicon_data = pickle.load(f)
-        with open(output_dir / "categories_data_part.pkl", "rb") as f:
-            categories_data = pickle.load(f)
-        current_sample = categories_data[-1]["training_sample_id"] + 1
-        logger.info(f"Resuming from sample {current_sample}")
-    else:
-        lexicon_data = []
-        categories_data = []
-        current_sample = 0
-
-    # Run the model for each sample
-    for i, sample in enumerate(dataset.iter_samples()):
-        if i < current_sample:
+        # Check if sample already processed
+        if sample in predictions:
+            logger.info(f"Sample {sample['idx']} already processed, skipping.")
             continue
-        
-        # Log and save progress
-        logger.info(f"Running sample {i}/{len(dataset)}")
-        if i % save_every == 0:
-            with open(output_dir / "lexicon_data_part.pkl", "wb") as f:
-                pickle.dump(lexicon_data, f)
-            with open(output_dir / "categories_data_part.pkl", "wb") as f:
-                pickle.dump(categories_data, f)
-            logger.info(f"Saved progress at sample {i}")
+
+        # Log progress
+        logger.info(f"Running sample {len(predictions)+1}/{len(dataset)}")
 
         # Run the model for each turn to compute the lexicon
-        for turn, utterance in enumerate(sample["utterances"], start=1):
-            past_utterances = sample["utterances"][:turn - 1]
-            prompts = dataset.create_prompts_from_past_utterances(
-                past_utterances=past_utterances,
-                speaker=utterance["speaker"]
+        turns_data = []
+        for turn, utterance in enumerate(sample["utterances"][1:-1], start=2):
+            # Prompts contains the possible meanings
+            # endings can be:
+            # - if speaker is patient: "yes" or "no" answers (in one of its variants)
+            # - if speaker is doctor: the question about the symptom
+            prompts, endings, true_ending_idx = dataset.create_prompts_from_past_utterances(
+                past_turns=sample["utterances"][:turn - 1],
+                current_turn=utterance,
             )
             all_logits = []
-            unique_utterances = world["patient_utterances"] if utterance["speaker"] == "patient" else world["doctor_utterances"]
             for prompt in prompts:
-                logits = model.predict(prompt, unique_utterances)
+                logits = llm.predict(prompt, endings)
                 all_logits.append(logits)
             all_logits = np.vstack(all_logits).T # L(u,m)
 
-            lexicon_data.append({
-                "sample_id": sample["dialog_id"],
+            turns_data.append({
                 "turn": turn,
-                "utt": utterance["content"],
                 "speaker": utterance["speaker"],
-                "lexicon": all_logits,
+                "speaker_logprob": all_logits,
+                "true_utt": true_ending_idx,
             })
-        category_prompt, endings = dataset.create_category_prompt_from_dialog(sample["utterances"], sample["symptoms"])
 
-        category_dist = model.predict(category_prompt, endings)
-        categories_data.append({
-            "training_sample_id": i,
-            "sample_id": sample["dialog_id"],
-            "category_dist": category_dist,
+        predictions.add({
+            "idx": sample["idx"],
             "disease": sample["disease"],
+            "turns": turns_data,
         })
-    
-    with open(output_dir / "lexicon_data.pkl", "wb") as f:
-        pickle.dump(lexicon_data, f)
-    with open(output_dir / "categories_data.pkl", "wb") as f:
-        pickle.dump(categories_data, f)
-    os.remove(output_dir / "lexicon_data_part.pkl")
-    os.remove(output_dir / "categories_data_part.pkl")
-    logger.info("Finished running model")
 
 
 def check_iter_args(alpha, max_depth, tolerance):
@@ -272,7 +242,6 @@ def main(
     base_model: str = "meta-llama/Llama-3.2-1B-Instruct",
     models: List = ["crsa", "rsa", "literal"],
     seed: int = None,
-    save_every: int = 100,
     alpha: float = 1.0,
     max_depth: int = float("inf"),
     tolerance: float = 0.01,
@@ -283,7 +252,7 @@ def main(
     # Set random seed for reproducibility
     np.random.seed(seed)
 
-    # run_llm(base_model, save_every, output_dir, logger)
+    run_llm(base_model, output_dir, logger)
 
     results = run_rsa(models, alpha=alpha, max_depth=max_depth, tolerance=tolerance, output_dir=output_dir, logger=logger)
     

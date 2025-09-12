@@ -1,0 +1,314 @@
+
+
+
+from copy import deepcopy
+import json
+import re
+
+import numpy as np
+
+
+class MDDialDataset:
+
+    data_dir = "data/mddial/"
+
+    YES_ANSWERS = [
+        "Yes, sometimes",
+        "I am experiencing that sometimes",
+        "Yes Doctor, I am feeling that as well",
+        "Yes most of the times"
+    ]
+
+    NO_ANSWERS = [
+        "No, I don't have that",
+        "No, I never had anything like that.",
+        "Well not in my knowledge",
+        "Not that I know of",
+    ]
+
+    def __init__(self, prompt_style, split="train"):
+        self.prompt_style = prompt_style
+        if split not in ["train", "test"]:
+            raise ValueError("split must be either 'train' or 'test'")
+        self.data, self.world, self.shots = self._load_data(f"{split}.json")
+        self.sampled_indices = np.random.permutation(len(self.data))
+
+    def _read_symptoms(self):
+        with open(self.data_dir + "symptom.txt", "r") as f:
+            symptoms = [line.strip() for line in f.readlines()]
+        return symptoms
+
+    def _read_diseases(self):
+        with open(self.data_dir + "disease.txt", "r") as f:
+            diseases = [line.strip() for line in f.readlines()]
+        return diseases
+    
+    def _get_disease_name(self, doctor_utterance, diseases):
+        match = re.search(r"(?:In that case, you have|This could probably be|I believe you are having from|Ok, this means you might be having) ([^\.]+)\.", doctor_utterance)
+        if match:
+            disease_name = match.group(1).strip()
+            # Check if the disease name is in the list of diseases
+            if disease_name in diseases:
+                return disease_name
+        return None
+    
+    def _get_symptoms(self, sample, symptoms):
+        # First check explicit symptoms
+        valid_explicit_symptoms = []
+        match = re.search(r"(?:Recently, I am experiencing|I have been feeling|Hi Doctor, I am having|I have) ([^.,]+)", sample[0]["patient"])
+        if match:
+            explicit_symptom = match.group(1).strip()
+            if explicit_symptom in symptoms:
+                valid_explicit_symptoms.append(explicit_symptom)
+            else:
+                explicit_symptoms = re.findall("(" + "|".join(symptoms) + ")", explicit_symptom)
+                if all(symptom in symptoms for symptom in explicit_symptoms):
+                    valid_explicit_symptoms.extend(explicit_symptoms)
+                else:
+                    raise ValueError(f"Explicit symptom '{explicit_symptoms}' not found in symptoms list.")
+        
+        # Then check implicit symptoms
+        valid_implicit_symptoms = []
+        negated_symptoms = []
+        for i, turn in enumerate(sample):
+            # patient answers
+            if i != 0:
+                if turn["patient"] in self.YES_ANSWERS:
+                    valid_implicit_symptoms.append(potential_symptom)
+                elif turn["patient"] in self.NO_ANSWERS:
+                    negated_symptoms.append(potential_symptom)
+                else:
+                    raise ValueError(f"Unexpected patient response: {turn['patient']}")
+            # doctor asks
+            if i != len(sample) - 1:
+                _, potential_symptom = self._get_template_and_symptom(turn["doctor"])
+                if not potential_symptom:
+                    raise ValueError(f"Could not find potential symptom in doctor utterance: {turn['doctor']}")
+        
+        return valid_explicit_symptoms, valid_implicit_symptoms, negated_symptoms
+    
+    def _get_template_and_symptom(self, doctor_utterance):
+        match = re.search(r"((?:Is it\? Then do you experience|In that case, do you have any|What about|Oh, do you have any)) ([^.,]+)\?", doctor_utterance)
+        if match:
+            template = match.group(1).strip() + " {symptom}?"
+            symptom = match.group(2).strip()
+        else:
+            raise ValueError(f"Could not find template and symptom in doctor utterance: {doctor_utterance}")
+        return template, symptom
+
+    def _load_data(self, filename):
+        diseases = self._read_diseases()
+        symptoms = self._read_symptoms()
+
+        with open(self.data_dir + filename, "r") as f:
+            data = json.load(f)
+        
+        dialogs = []
+        disease2symptoms = {}
+        for dialog_id in range(1,len(data)+1):
+            sample = data[f"Dialog {dialog_id}"]
+            
+            # Read disease name from the last doctor's utterance
+            disease = self._get_disease_name(sample[-1]["doctor"], diseases)
+            if not disease:
+                continue
+
+            # Read symptoms from the sample
+            valid_explicit_symptoms, valid_implicit_symptoms, negated_symptoms = self._get_symptoms(sample, symptoms)
+            if disease not in disease2symptoms:
+                disease2symptoms[disease] = np.zeros(len(symptoms), dtype=bool)
+            for symptom in valid_explicit_symptoms + valid_implicit_symptoms:
+                disease2symptoms[disease][symptoms.index(symptom)] = True
+
+            # Read utterances
+            utterances = []
+            for t, turn in enumerate(sample):
+                utterances.append({
+                    "speaker": "patient",
+                    "content": turn["patient"],
+                    "dialog_act": "explicit_symptom" if t == 0 else "implicit_symptom"
+                })
+
+                utterance = {
+                    "speaker": "doctor",
+                    "content": turn["doctor"],
+                }
+                if t != len(sample) - 1:  # Last turn is diagnosis
+                    template, symptom = self._get_template_and_symptom(turn["doctor"])
+                    utterance["dialog_act"] = {
+                        "type": "question",
+                        "template": template,
+                        "symptom": symptom,
+                    }
+                else:
+                    utterance["dialog_act"] = {"type": "diagnosis"}
+                utterances.append(utterance)
+
+            dialogs.append({
+                "idx": dialog_id,
+                "disease": diseases.index(disease),
+                "valid_explicit_symptoms": [symptoms.index(s) for s in valid_explicit_symptoms],
+                "valid_implicit_symptoms": [symptoms.index(s) for s in valid_implicit_symptoms],
+                "negated_symptoms": [symptoms.index(s) for s in negated_symptoms],
+                "symptoms": [symptoms.index(s) for s in valid_explicit_symptoms + valid_implicit_symptoms],
+                "utterances": utterances,
+            })
+
+        world = {
+            "diseases": diseases,
+            "symptoms": symptoms,
+            "disease2symptoms": np.stack([disease2symptoms[disease] for disease in diseases], axis=0),
+        }
+
+        shots = []
+
+        return dialogs, world, shots
+            
+
+        # prior = np.zeros((len(diseases), 1, len(diseases)))
+        # for i, d in enumerate(diseases):
+        #     prior[i, 0, i] = d_count[d]
+        # prior = prior / np.sum(prior)
+
+        # world = {
+        #     "diseases": diseases,
+        #     "symptoms": [f"symptoms_group_{i}" for i in range(1, len(diseases) + 1)],
+        #     "prior": prior,
+        # }
+
+        # doctor_utterances = []
+        # patient_utterances = []
+        # for sample in valid_data:
+        #     for turn in sample["dialog"]:
+        #         if turn["speaker"] == "patient" and turn["content"] not in patient_utterances:
+        #             patient_utterances.append(turn["content"])
+        #         elif turn["speaker"] == "doctor" and turn["content"] not in doctor_utterances:
+        #             doctor_utterances.append(turn["content"])
+        # world["patient_utterances"] = patient_utterances
+        # world["doctor_utterances"] = doctor_utterances
+
+        # shots_ids = [5, 43, 1204, 864]
+        # shots = []
+        # for i in shots_ids:
+        #     record = deepcopy(valid_data[i])
+        #     shots.append({
+        #         "idx": record["dialog_id"],
+        #         "symptoms": record["symptoms"],
+        #         "utterances": record["dialog"],
+        #         "disease": record["target_disease"],
+        #     })
+        # self.shots = shots
+
+        # return valid_data, world
+
+    def __getitem__(self, idx):
+        return deepcopy(self.data[idx])
+
+    def iter_samples(self):
+        for idx in self.sampled_indices:
+            sample = self[idx]
+            yield sample
+
+    def __len__(self):
+        return len(self.data)
+    
+
+    def create_prompts_from_past_utterances(self, past_turns, current_turn):
+        
+        if current_turn["speaker"] == "patient":
+            # Patient speaks. Create prompt from past utterances for each possible set of symptoms
+            prompts = []
+            for diseases_id in range(len(self.world["diseases"])):
+                symptoms = [s for i, s in enumerate(self.world["symptoms"]) if self.world["disease2symptoms"][diseases_id,i]]
+                messages = [{'role': 'system', 'content': self._create_patient_system_prompt(symptoms)}]
+                for turn in past_turns:
+                    if turn["speaker"] == "patient":
+                        messages.append({'role': 'assistant', 'content': turn["content"]})
+                    else:
+                        messages.append({'role': 'user', 'content': turn["content"]})
+                prompts.append(self.prompt_style.apply(messages))
+            if current_turn["content"] in self.YES_ANSWERS:
+                endings = [
+                    self.prompt_style.apply([{"role": "assistant", "content": current_turn["content"]}]), 
+                    self.prompt_style.apply([{"role": "assistant", "content": np.random.choice(self.NO_ANSWERS)}])
+                ]
+                true_ending_idx = 0
+            elif current_turn["content"] in self.NO_ANSWERS:
+                endings = [
+                    self.prompt_style.apply([{"role": "assistant", "content": np.random.choice(self.YES_ANSWERS)}]), 
+                    self.prompt_style.apply([{"role": "assistant", "content": current_turn["content"]}])
+                ]
+                true_ending_idx = 1
+            else:
+                raise ValueError(f"Unexpected patient response: {current_turn['content']}")
+
+        elif current_turn["speaker"] == "doctor":
+            # Doctor speaks. Create prompt from past utterances.
+            messages = [{'role': 'system', 'content': self._create_doctor_system_prompt()}]
+            for turn in past_turns:
+                if turn["speaker"] == "doctor":
+                    messages.append({'role': 'assistant', 'content': turn["content"]})
+                else:
+                    messages.append({'role': 'user', 'content': turn["content"]})
+            prompts = [self.prompt_style.apply(messages)]
+            endings = [self.prompt_style.apply([{"role": "assistant", "content": current_turn["dialog_act"]["template"].format(symptom=s)}]) for s in self.world["symptoms"]]
+            true_ending_idx = self.world["symptoms"].index(current_turn["dialog_act"]["symptom"])
+
+        return prompts, endings, true_ending_idx
+    
+    def _create_patient_system_prompt(self, symptoms):
+        system_prompt = (
+            "You are an assistant that simulates to be a patient "
+            "who has a disease and describes the symptoms to the user, "
+            "which is a medical doctor.\n\n"
+        )
+        for example in self.shots:
+            system_prompt += (
+                "Here is an example of a conversation "
+                "between the assitant (i.e., the patient) and the user (i.e., the doctor). "
+                "You are experiencing the following symptoms:\n"
+            )
+            system_prompt += ", ".join(example['symptoms']) + "\n"
+            for turn in example["utterances"]:
+                if turn["speaker"] == "patient":
+                    system_prompt += f"Assistant: {turn['content']}\n"
+                else:
+                    system_prompt += f"User: {turn['content']}\n"
+            system_prompt += "\n"
+        system_prompt += (
+            "Now, participate in a real conversation with the user. "
+            "You are experiencing the following symptoms:\n"
+        )
+        system_prompt += ", ".join(symptoms) + "\n"
+        return system_prompt
+    
+    def _create_doctor_system_prompt(self):
+        system_prompt = (
+            "You are an assistant that simulates to be a doctor "
+            "who is diagnosing a patient based on the symptoms that he or she describes. "
+            "You can ask questions to the patient, but ultimately, "
+            "you have provide a diagnosis based on the symptoms described by the patient.\n\n"
+        )
+        for example in self.shots:
+            system_prompt += (
+                "Here is an example of a conversation "
+                "between the assitant (i.e., the doctor) and the user (i.e., the patient). "
+                "The patient is experiencing the following symptoms:\n"
+            )
+            for turn in example["utterances"]:
+                if turn["speaker"] == "patient":
+                    system_prompt += f"User: {turn['content']}\n"
+                else:
+                    system_prompt += f"Assistant: {turn['content']}\n"
+            system_prompt += "\n"
+        system_prompt += (
+            "Now, participate in a real conversation with the user. "
+            "You can ask questions to the patient, but ultimately, "
+            "you have provide a diagnosis based on the symptoms described by the patient.\n"
+        )
+        return system_prompt
+
+            
+    
+
+

@@ -2,3 +2,5 @@
 /outputs/
 __pycache__/
 *.egg-info/
+
+/checkpoints/
