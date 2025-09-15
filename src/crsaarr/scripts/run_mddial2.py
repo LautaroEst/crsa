@@ -157,10 +157,12 @@ def run_rsa(models, alpha, max_depth, tolerance, output_dir: Path, logger: loggi
         logger.info(f"Running {model_name} with alpha={alpha}, max_depth={max_depth}, tolerance={tolerance}")
         # Run the model for each sample
         for i, sample in enumerate(dataset.iter_samples()):
+            if sample["idx"] == 734:
+                import pdb; pdb.set_trace()
             if sample not in predictions:
                 continue
             sample_data = predictions[sample["idx"]]
-            model.reset(sample["disease"], "You are a doctor")
+            model.reset(world["diseases"][sample["disease"]], "You are a doctor")
             # for (_, turn), (utt, speaker, log_lexicon) in df_lex.loc[(sample["dialog_id"], slice(None)), :].iterrows():
             for turn_data in sample_data["turns"]:
                 turn = turn_data["turn"]
@@ -183,13 +185,11 @@ def run_rsa(models, alpha, max_depth, tolerance, output_dir: Path, logger: loggi
                     "speaker_dist": model.past_speaker_dist[-1],
                     "lexicon_dist": model.past_lexicon_dist[-1],
                     "category_idx": sample["disease"],
-                    "category_distribution": sample["category_distribution"],
+                    "category_distribution": sample_data["category_distribution"],
                     "listener_dist": model.get_category_distribution(),
                     "belief_A": model.belief_A if model_name == "crsa" else None,
                     "belief_B": model.belief_B if model_name == "crsa" else None,
                 })
-            import pdb; pdb.set_trace()
-
     
     # Concatenate all results
     all_results = pd.DataFrame(results)

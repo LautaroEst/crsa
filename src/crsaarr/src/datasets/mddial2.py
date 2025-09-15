@@ -103,7 +103,7 @@ class MDDialDataset:
         with open(self.data_dir + filename, "r") as f:
             data = json.load(f)
         
-        dialogs = []
+        dialogs = {}
         disease2symptoms = {}
         for dialog_id in range(1,len(data)+1):
             sample = data[f"Dialog {dialog_id}"]
@@ -144,7 +144,7 @@ class MDDialDataset:
                     utterance["dialog_act"] = {"type": "diagnosis"}
                 utterances.append(utterance)
 
-            dialogs.append({
+            dialogs[dialog_id] = {
                 "idx": dialog_id,
                 "disease": diseases.index(disease),
                 "valid_explicit_symptoms": [symptoms.index(s) for s in valid_explicit_symptoms],
@@ -152,7 +152,7 @@ class MDDialDataset:
                 "negated_symptoms": [symptoms.index(s) for s in negated_symptoms],
                 "symptoms": [symptoms.index(s) for s in valid_explicit_symptoms + valid_implicit_symptoms],
                 "utterances": utterances,
-            })
+            }
 
         world = {
             "diseases": diseases,
@@ -312,7 +312,8 @@ class MDDialDataset:
         return system_prompt
     
     def create_category_prompt_from_dialog(self, utterances, symptoms):
-        messages = [{"role": "system", "content": self._create_patient_system_prompt(symptoms)}]
+        symptoms_str = [self.world["symptoms"][s] for s in symptoms]
+        messages = [{"role": "system", "content": self._create_patient_system_prompt(symptoms_str)}]
         for utterance in utterances[:-1]:
             if utterance["speaker"] == "patient":
                 messages.append({"role": "assistant", "content": utterance["content"]})
