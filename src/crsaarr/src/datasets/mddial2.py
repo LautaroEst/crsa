@@ -51,7 +51,7 @@ class MDDialDataset:
             # Check if the disease name is in the list of diseases
             if disease_name in diseases:
                 return template, disease_name
-        return None
+        return None, None
     
     def _get_symptoms(self, sample, symptoms):
         # First check explicit symptoms
@@ -320,16 +320,16 @@ class MDDialDataset:
         messages = [{"role": "system", "content": self._create_doctor_system_prompt()}]
         for utterance in utterances[:-1]:
             if utterance["speaker"] == "patient":
-                messages.append({"role": "assistant", "content": utterance["content"]})
-            else:
                 messages.append({"role": "user", "content": utterance["content"]})
+            else:
+                messages.append({"role": "assistant", "content": utterance["content"]})
         category_prompt = self.prompt_style.apply(messages)
         
         if utterances[-1]["speaker"] != "doctor":
             raise ValueError("The last utterance must be from the doctor.")
         endings = [
             self.prompt_style.apply([
-                {"role": "user", "content": utterances[-1]["dialog_act"]["template"].format(disease=disease)}
+                {"role": "assistant", "content": utterances[-1]["dialog_act"]["template"].format(disease=disease)}
             ]) for disease in self.world["diseases"]
         ]
         return category_prompt, endings
