@@ -44,12 +44,13 @@ class MDDialDataset:
         return diseases
     
     def _get_disease_name(self, doctor_utterance, diseases):
-        match = re.search(r"(?:In that case, you have|This could probably be|I believe you are having from|Ok, this means you might be having) ([^\.]+)\.", doctor_utterance)
+        match = re.search(r"((?:In that case, you have|This could probably be|I believe you are having from|Ok, this means you might be having)) ([^\.]+)\.", doctor_utterance)
         if match:
-            disease_name = match.group(1).strip()
+            template = match.group(1).strip() + " {disease}."
+            disease_name = match.group(2).strip()
             # Check if the disease name is in the list of diseases
             if disease_name in diseases:
-                return disease_name
+                return template, disease_name
         return None
     
     def _get_symptoms(self, sample, symptoms):
@@ -109,7 +110,7 @@ class MDDialDataset:
             sample = data[f"Dialog {dialog_id}"]
             
             # Read disease name from the last doctor's utterance
-            disease = self._get_disease_name(sample[-1]["doctor"], diseases)
+            diagnostic_template, disease = self._get_disease_name(sample[-1]["doctor"], diseases)
             if not disease:
                 continue
 
@@ -141,7 +142,11 @@ class MDDialDataset:
                         "symptom": symptom,
                     }
                 else:
-                    utterance["dialog_act"] = {"type": "diagnosis"}
+                    utterance["dialog_act"] = {
+                        "type": "diagnosis",
+                        "template": diagnostic_template,
+                        "disease": disease,
+                    }
                 utterances.append(utterance)
 
             dialogs[dialog_id] = {
@@ -311,9 +316,8 @@ class MDDialDataset:
         )
         return system_prompt
     
-    def create_category_prompt_from_dialog(self, utterances, symptoms):
-        symptoms_str = [self.world["symptoms"][s] for s in symptoms]
-        messages = [{"role": "system", "content": self._create_patient_system_prompt(symptoms_str)}]
+    def create_category_prompt_from_dialog(self, utterances):
+        messages = [{"role": "system", "content": self._create_doctor_system_prompt()}]
         for utterance in utterances[:-1]:
             if utterance["speaker"] == "patient":
                 messages.append({"role": "assistant", "content": utterance["content"]})
@@ -323,14 +327,9 @@ class MDDialDataset:
         
         if utterances[-1]["speaker"] != "doctor":
             raise ValueError("The last utterance must be from the doctor.")
-        last_utterance = utterances[-1]["content"]
-        for disease in self.world["diseases"]:
-            if " " + disease in last_utterance:
-                last_utterance = last_utterance.replace(disease, "{disease}")
-                break
         endings = [
             self.prompt_style.apply([
-                {"role": "user", "content": last_utterance.format(disease=disease)}
+                {"role": "user", "content": utterances[-1]["dialog_act"]["template"].format(disease=disease)}
             ]) for disease in self.world["diseases"]
         ]
         return category_prompt, endings

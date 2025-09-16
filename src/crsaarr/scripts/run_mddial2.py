@@ -78,7 +78,7 @@ def run_llm(
                 "true_utt": true_ending_idx,
             })
 
-        category_prompt, endings = dataset.create_category_prompt_from_dialog(sample["utterances"], sample["symptoms"])
+        category_prompt, endings = dataset.create_category_prompt_from_dialog(sample["utterances"])
         category_distribution = llm.predict(category_prompt, endings)
         predictions.add({
             "idx": sample["idx"],
@@ -157,8 +157,8 @@ def run_rsa(models, alpha, max_depth, tolerance, output_dir: Path, logger: loggi
         logger.info(f"Running {model_name} with alpha={alpha}, max_depth={max_depth}, tolerance={tolerance}")
         # Run the model for each sample
         for i, sample in enumerate(dataset.iter_samples()):
-            if sample["idx"] == 734:
-                import pdb; pdb.set_trace()
+            # if sample["idx"] == 488:
+            #     import pdb; pdb.set_trace()
             if sample not in predictions:
                 continue
             sample_data = predictions[sample["idx"]]

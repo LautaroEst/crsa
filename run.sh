@@ -21,8 +21,10 @@ srun python -m crsaarr.scripts.run_mddial2 \
     --base_model $base_model \
     --models "crsa" "rsa" \
     --alpha 2.5 \
-    --tolerance 1e-3 \
+    --max_depth 1 \
     --seed 1234 
+    # --tolerance 1e-3 \
+    # --seed 1234 
 
 
 # Finish
