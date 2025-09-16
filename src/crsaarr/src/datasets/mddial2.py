@@ -31,7 +31,7 @@ class MDDialDataset:
         if split not in ["train", "test"]:
             raise ValueError("split must be either 'train' or 'test'")
         self.data, self.world, self.shots = self._load_data(f"{split}.json")
-        self.sampled_indices = np.random.permutation(len(self.data))
+        self.sampled_indices = np.random.permutation(sorted(self.data.keys()))
 
     def _read_symptoms(self):
         with open(self.data_dir + "symptom.txt", "r") as f:

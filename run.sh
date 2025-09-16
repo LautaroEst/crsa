@@ -1,4 +1,7 @@
 #!/bin/bash -e
+#SBATCH -J rsa
+#SBATCH -t 12:00:00
+#SBATCH --gres=gpu:1
 
 # Source the Conda initialization script
 source ~/anaconda3/etc/profile.d/conda.sh
@@ -14,7 +17,7 @@ conda activate crsa
 
 base_model="meta-llama/Llama-3.2-1B-Instruct"
 # base_model="EleutherAI/pythia-70m"
-python -m crsaarr.scripts.run_mddial2 \
+srun python -m crsaarr.scripts.run_mddial2 \
     --base_model $base_model \
     --models "crsa" "rsa" \
     --alpha 2.5 \

@@ -260,7 +260,7 @@ def main(
     # Set random seed for reproducibility
     np.random.seed(seed)
 
-    # run_llm(base_model, output_dir, logger)
+    run_llm(base_model, output_dir, logger)
 
     results = run_rsa(models, alpha=alpha, max_depth=max_depth, tolerance=tolerance, output_dir=output_dir, logger=logger)
     
