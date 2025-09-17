@@ -6,6 +6,7 @@ import json
 import re
 
 import numpy as np
+from tqdm import tqdm
 
 
 class MDDialDataset:
@@ -25,6 +26,8 @@ class MDDialDataset:
         "Well not in my knowledge",
         "Not that I know of",
     ]
+
+    TRAIN_SAMPLES = 1878
 
     def __init__(self, prompt_style, split="train"):
         self.prompt_style = prompt_style
@@ -106,6 +109,7 @@ class MDDialDataset:
         
         dialogs = {}
         disease2symptoms = {}
+        counts = {d: 0 for d in diseases}
         for dialog_id in range(1,len(data)+1):
             sample = data[f"Dialog {dialog_id}"]
             
@@ -113,6 +117,7 @@ class MDDialDataset:
             diagnostic_template, disease = self._get_disease_name(sample[-1]["doctor"], diseases)
             if not disease:
                 continue
+            counts[disease] += 1
 
             # Read symptoms from the sample
             valid_explicit_symptoms, valid_implicit_symptoms, negated_symptoms = self._get_symptoms(sample, symptoms)
@@ -159,67 +164,44 @@ class MDDialDataset:
                 "utterances": utterances,
             }
 
+        prior = np.diag(np.array([counts[d] for d in diseases]) / len(dialogs)) #+ np.abs(np.random.randn(len(diseases), len(diseases)) * 1e-4)
+        # prior = np.eye(len(diseases))
+        # prior = np.tile(np.array([counts[d] for d in diseases]) / len(dialogs), (len(diseases),1)).T
+        # prior = np.tile(np.array([counts[d] for d in diseases]) / len(dialogs), (len(diseases),1))
+        prior = prior / np.sum(prior)
+        prior = np.expand_dims(prior, axis=1)
+
+
         world = {
             "diseases": diseases,
             "symptoms": symptoms,
             "disease2symptoms": np.stack([disease2symptoms[disease] for disease in diseases], axis=0),
-            "prior": np.expand_dims(np.eye(len(diseases)) / len(diseases), axis=1),  # Uniform prior
+            # "prior": np.expand_dims(np.tile(np.array([counts[d] for d in diseases]) / len(dialogs), (len(diseases),1)), axis=1),
+            "prior": prior,
             "doctor_utterances": deepcopy(symptoms),  # Doctor can ask about any symptom
             "patient_utterances": ["yes", "no"],  # Patient can only answer yes or no
         }
 
-        shots = []
+        shots_ids = [8, 1706]
+        shots = [dialogs[i] for i in shots_ids]
 
         return dialogs, world, shots
             
-
-        # prior = np.zeros((len(diseases), 1, len(diseases)))
-        # for i, d in enumerate(diseases):
-        #     prior[i, 0, i] = d_count[d]
-        # prior = prior / np.sum(prior)
-
-        # world = {
-        #     "diseases": diseases,
-        #     "symptoms": [f"symptoms_group_{i}" for i in range(1, len(diseases) + 1)],
-        #     "prior": prior,
-        # }
-
-        # doctor_utterances = []
-        # patient_utterances = []
-        # for sample in valid_data:
-        #     for turn in sample["dialog"]:
-        #         if turn["speaker"] == "patient" and turn["content"] not in patient_utterances:
-        #             patient_utterances.append(turn["content"])
-        #         elif turn["speaker"] == "doctor" and turn["content"] not in doctor_utterances:
-        #             doctor_utterances.append(turn["content"])
-        # world["patient_utterances"] = patient_utterances
-        # world["doctor_utterances"] = doctor_utterances
-
-        # shots_ids = [5, 43, 1204, 864]
-        # shots = []
-        # for i in shots_ids:
-        #     record = deepcopy(valid_data[i])
-        #     shots.append({
-        #         "idx": record["dialog_id"],
-        #         "symptoms": record["symptoms"],
-        #         "utterances": record["dialog"],
-        #         "disease": record["target_disease"],
-        #     })
-        # self.shots = shots
-
-        # return valid_data, world
 
     def __getitem__(self, idx):
         return deepcopy(self.data[idx])
 
     def iter_samples(self):
-        for idx in self.sampled_indices:
+        for idx in tqdm(self.sampled_indices):
             sample = self[idx]
             yield sample
 
     def __len__(self):
         return len(self.data)
     
+    @property
+    def indices(self):
+        return sorted(self.data.keys())
 
     def create_prompts_from_past_utterances(self, past_turns, current_turn):
         
@@ -276,7 +258,7 @@ class MDDialDataset:
                 "between the assitant (i.e., the patient) and the user (i.e., the doctor). "
                 "You are experiencing the following symptoms:\n"
             )
-            system_prompt += ", ".join(example['symptoms']) + "\n"
+            system_prompt += ", ".join([self.world['symptoms'][s] for s in example['symptoms']]) + "\n"
             for turn in example["utterances"]:
                 if turn["speaker"] == "patient":
                     system_prompt += f"Assistant: {turn['content']}\n"
@@ -316,20 +298,21 @@ class MDDialDataset:
         )
         return system_prompt
     
-    def create_category_prompt_from_dialog(self, utterances):
-        messages = [{"role": "system", "content": self._create_doctor_system_prompt()}]
+    def create_category_prompt_from_dialog(self, utterances, symptoms):
+        symptoms_str = ", ".join([self.world["symptoms"][s] for s in symptoms])
+        messages = [{"role": "system", "content": self._create_patient_system_prompt(symptoms_str)}]
         for utterance in utterances[:-1]:
             if utterance["speaker"] == "patient":
-                messages.append({"role": "user", "content": utterance["content"]})
-            else:
                 messages.append({"role": "assistant", "content": utterance["content"]})
+            else:
+                messages.append({"role": "user", "content": utterance["content"]})
         category_prompt = self.prompt_style.apply(messages)
         
         if utterances[-1]["speaker"] != "doctor":
             raise ValueError("The last utterance must be from the doctor.")
         endings = [
             self.prompt_style.apply([
-                {"role": "assistant", "content": utterances[-1]["dialog_act"]["template"].format(disease=disease)}
+                {"role": "user", "content": utterances[-1]["dialog_act"]["template"].format(disease=disease)}
             ]) for disease in self.world["diseases"]
         ]
         return category_prompt, endings

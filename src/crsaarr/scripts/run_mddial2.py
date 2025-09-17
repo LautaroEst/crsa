@@ -35,6 +35,12 @@ def run_llm(
     logger: logging.Logger = None,
 ):
     
+    # Load existing predictions if they exist
+    predictions = Predictions(output_dir / "predictions")
+    if len(predictions) == MDDialDataset.TRAIN_SAMPLES:
+        logger.info(f"All {len(predictions)} samples already processed, skipping LLM run.")
+        return
+    
     # Init model
     logger.info(f"Loading model {base_model}")
     llm = LLM.load(base_model)
@@ -42,8 +48,6 @@ def run_llm(
 
     # Init dataset
     dataset = MDDialDataset(prompt_style=llm.prompt_style, split="train")
-    
-    predictions = Predictions(output_dir / "predictions")
     for sample in dataset.iter_samples():
 
         # Check if sample already processed
@@ -78,7 +82,7 @@ def run_llm(
                 "true_utt": true_ending_idx,
             })
 
-        category_prompt, endings = dataset.create_category_prompt_from_dialog(sample["utterances"])
+        category_prompt, endings = dataset.create_category_prompt_from_dialog(sample["utterances"], sample["symptoms"])
         category_distribution = llm.predict(category_prompt, endings)
         predictions.add({
             "idx": sample["idx"],
@@ -157,13 +161,10 @@ def run_rsa(models, alpha, max_depth, tolerance, output_dir: Path, logger: loggi
         logger.info(f"Running {model_name} with alpha={alpha}, max_depth={max_depth}, tolerance={tolerance}")
         # Run the model for each sample
         for i, sample in enumerate(dataset.iter_samples()):
-            # if sample["idx"] == 488:
-            #     import pdb; pdb.set_trace()
             if sample not in predictions:
                 continue
             sample_data = predictions[sample["idx"]]
             model.reset(world["diseases"][sample["disease"]], "You are a doctor")
-            # for (_, turn), (utt, speaker, log_lexicon) in df_lex.loc[(sample["dialog_id"], slice(None)), :].iterrows():
             for turn_data in sample_data["turns"]:
                 turn = turn_data["turn"]
                 speaker = turn_data["speaker"]
@@ -209,15 +210,17 @@ def compute_results(results, models, alpha, output_dir: Path):
         lexicon_accuracy = []
         dialogs = results[(results["alpha"] == alpha) & (results["model_name"] == model_name)].sort_values(["sample_id","turn"])
         for dialog_id, dialog in dialogs.groupby("sample_id"):
+            dialog = dialog.sort_values("turn")
             for i, row in dialog.iterrows():
                 speaker_logprobs.append(-np.log(row["speaker_dist"][row["true_utt_idx"]]))
                 lexicon_logprobs.append(-np.log(row["lexicon_dist"] + ZERO)[row["true_utt_idx"]])
-                category_logprobs.append(-np.log(row["listener_dist"])[row["category_idx"]])
-                argmax_classes = np.arange(len(row["listener_dist"]))[row["listener_dist"] == np.max(row["listener_dist"])]
-                argmax = np.random.permutation(argmax_classes)[0] if len(argmax_classes) > 1 else argmax_classes[0]    
-                category_accuracy.append(argmax == row["category_idx"])
-                lexicon_cat_logprobs.append(-log_softmax(row["category_distribution"])[row["category_idx"]])
-                lexicon_accuracy.append(np.argmax(row["category_distribution"]) == row["category_idx"])
+            category_logprobs.append(-np.log(row["listener_dist"])[row["category_idx"]])
+            argmax_classes = np.arange(len(row["listener_dist"]))[row["listener_dist"] == np.max(row["listener_dist"])]
+            argmax = np.random.permutation(argmax_classes)[0] if len(argmax_classes) > 1 else argmax_classes[0]    
+            category_accuracy.append(argmax == row["category_idx"])
+            category_accuracy.append(np.argmax(row["listener_dist"]) == row["category_idx"])
+            lexicon_cat_logprobs.append(-log_softmax(row["category_distribution"])[row["category_idx"]])
+            lexicon_accuracy.append(np.argmax(row["category_distribution"]) == row["category_idx"])
         
         ce_speaker = np.mean(speaker_logprobs)
         ce_lexicon = np.mean(lexicon_logprobs)
@@ -265,7 +268,6 @@ def main(
     results = run_rsa(models, alpha=alpha, max_depth=max_depth, tolerance=tolerance, output_dir=output_dir, logger=logger)
     
     compute_results(results, models, alpha, output_dir)
-    # plot_turns(results, models, output_dir)
     
 
 
