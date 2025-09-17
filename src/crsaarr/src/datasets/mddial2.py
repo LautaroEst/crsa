@@ -168,7 +168,8 @@ class MDDialDataset:
             "patient_utterances": ["yes", "no"],  # Patient can only answer yes or no
         }
 
-        shots = []
+        shots_ids = [8, 1706]
+        shots = [dialogs[i] for i in shots_ids]
 
         return dialogs, world, shots
             
@@ -276,7 +277,7 @@ class MDDialDataset:
                 "between the assitant (i.e., the patient) and the user (i.e., the doctor). "
                 "You are experiencing the following symptoms:\n"
             )
-            system_prompt += ", ".join(example['symptoms']) + "\n"
+            system_prompt += ", ".join([self.world['symptoms'][s] for s in example['symptoms']]) + "\n"
             for turn in example["utterances"]:
                 if turn["speaker"] == "patient":
                     system_prompt += f"Assistant: {turn['content']}\n"
@@ -316,20 +317,21 @@ class MDDialDataset:
         )
         return system_prompt
     
-    def create_category_prompt_from_dialog(self, utterances):
-        messages = [{"role": "system", "content": self._create_doctor_system_prompt()}]
+    def create_category_prompt_from_dialog(self, utterances, symptoms):
+        symptoms_str = ", ".join([self.world["symptoms"][s] for s in symptoms])
+        messages = [{"role": "system", "content": self._create_patient_system_prompt(symptoms_str)}]
         for utterance in utterances[:-1]:
             if utterance["speaker"] == "patient":
-                messages.append({"role": "user", "content": utterance["content"]})
-            else:
                 messages.append({"role": "assistant", "content": utterance["content"]})
+            else:
+                messages.append({"role": "user", "content": utterance["content"]})
         category_prompt = self.prompt_style.apply(messages)
         
         if utterances[-1]["speaker"] != "doctor":
             raise ValueError("The last utterance must be from the doctor.")
         endings = [
             self.prompt_style.apply([
-                {"role": "assistant", "content": utterances[-1]["dialog_act"]["template"].format(disease=disease)}
+                {"role": "user", "content": utterances[-1]["dialog_act"]["template"].format(disease=disease)}
             ]) for disease in self.world["diseases"]
         ]
         return category_prompt, endings

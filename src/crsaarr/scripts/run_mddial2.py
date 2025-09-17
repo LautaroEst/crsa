@@ -78,7 +78,7 @@ def run_llm(
                 "true_utt": true_ending_idx,
             })
 
-        category_prompt, endings = dataset.create_category_prompt_from_dialog(sample["utterances"])
+        category_prompt, endings = dataset.create_category_prompt_from_dialog(sample["utterances"], sample['symptoms'])
         category_distribution = llm.predict(category_prompt, endings)
         predictions.add({
             "idx": sample["idx"],
