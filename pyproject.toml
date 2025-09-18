@@ -3,10 +3,10 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "crsaarr"
+name = "crsa"
 version = "0.0.1"
 authors = [
-  { name="name", email="name@name.com" },
+  { name="Lautaro Estienne", email="lautaro.estienne@universite-paris-saclay.fr" },
 ]
 description = "Collaborative Rational Speech Act model."
 readme = "README.md"
@@ -18,5 +18,5 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://name.com"
-Issues = "https://name.com/issues"
+Homepage = "https://github.com/LautaroEst/crsa"
+Issues = "https://github.com/LautaroEst/crsa/issues"
