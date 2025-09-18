@@ -2,7 +2,7 @@
 from pathlib import Path
 import numpy as np
 
-from ..src.datasets.mddial2 import MDDialDataset
+from ..src.datasets.mddial import MDDialDataset
 from ..src.llm_models.base_llm import LLM
 from ..src.utils import init_logger, Predictions
 

@@ -12,107 +12,72 @@ import matplotlib.pyplot as plt
 from scipy.special import log_softmax, softmax
 
 from ..src.llm_models import LLM, LLMCRSA, LLMRSA, LLMLiteral, ZERO
-from ..src.datasets import MDDialDataset
-from ..src.utils import init_logger
+from ..src.utils import init_logger, Predictions
 from ..src.evaluate import compute_metric
-
-
-model2config = {
-    "crsa_wm": {"label": "CRSA $\\mathcal{L}(u,m_S,w)$", "color": "tab:blue", "linestyle": "--"},
-    "crsa": {"label": "CRSA $\\mathcal{L}(u,m_S)$", "color": "tab:blue", "linestyle": "-"},
-    "rsa_wm": {"label": "RSA $\\mathcal{L}(u,m_S,w)$", "color": "tab:orange", "linestyle": "--"},
-    "rsa": {"label": "RSA $\\mathcal{L}(u,m_S)$", "color": "tab:orange", "linestyle": "-"},
-    "literal_wm": {"label": "Literal $\\mathcal{L}(u,m_S,w)$", "color": "tab:green", "linestyle": "--"},
-    "literal": {"label": "Literal $\\mathcal{L}(u,m_S)$", "color": "tab:green", "linestyle": "-"},
-    "prior": {"label": "Prior $P(y|m_L)$", "color": "tab:red", "linestyle": "-"},
-}
-
+from ..src.datasets.mddial import MDDialDataset
 
 
 def run_llm(
     base_model: str = "meta-llama/Llama-3.2-1B-Instruct",
-    save_every: int = 100,
     output_dir: Path = Path("outputs"),
     logger: logging.Logger = None,
 ):
-
-    if (output_dir / "lexicon_data.pkl").exists() and (output_dir / "categories_data.pkl").exists():
-        logger.info("Model already run, skipping...")
+    
+    # Load existing predictions if they exist
+    predictions = Predictions(output_dir / "predictions")
+    if len(predictions) == MDDialDataset.TRAIN_SAMPLES:
+        logger.info(f"All {len(predictions)} samples already processed, skipping LLM run.")
         return
-
-    # Initialize the model
+    
+    # Init model
     logger.info(f"Loading model {base_model}")
-    model = LLM.load(base_model)
-    model.distribute(accelerator="auto", precision="bf16-true")
+    llm = LLM.load(base_model)
+    llm.distribute(accelerator="auto", precision="bf16-true")
 
     # Init dataset
-    dataset = MDDialDataset(prompt_style=model.prompt_style, split="train")
-    world = dataset.world
+    dataset = MDDialDataset(prompt_style=llm.prompt_style, split="train")
+    for sample in dataset.iter_samples():
 
-    if (output_dir / "lexicon_data_part.pkl").exists() and (output_dir / "categories_data_part.pkl").exists():
-        with open(output_dir / "lexicon_data_part.pkl", "rb") as f:
-            lexicon_data = pickle.load(f)
-        with open(output_dir / "categories_data_part.pkl", "rb") as f:
-            categories_data = pickle.load(f)
-        current_sample = categories_data[-1]["training_sample_id"] + 1
-        logger.info(f"Resuming from sample {current_sample}")
-    else:
-        lexicon_data = []
-        categories_data = []
-        current_sample = 0
-
-    # Run the model for each sample
-    for i, sample in enumerate(dataset.iter_samples()):
-        if i < current_sample:
+        # Check if sample already processed
+        if sample in predictions:
+            logger.info(f"Sample {sample['idx']} already processed, skipping.")
             continue
-        
-        # Log and save progress
-        logger.info(f"Running sample {i}/{len(dataset)}")
-        if i % save_every == 0:
-            with open(output_dir / "lexicon_data_part.pkl", "wb") as f:
-                pickle.dump(lexicon_data, f)
-            with open(output_dir / "categories_data_part.pkl", "wb") as f:
-                pickle.dump(categories_data, f)
-            logger.info(f"Saved progress at sample {i}")
+
+        # Log progress
+        logger.info(f"Running sample {len(predictions)+1}/{len(dataset)}")
 
         # Run the model for each turn to compute the lexicon
-        for turn, utterance in enumerate(sample["utterances"], start=1):
-            past_utterances = sample["utterances"][:turn - 1]
-            prompts = dataset.create_prompts_from_past_utterances(
-                past_utterances=past_utterances,
-                speaker=utterance["speaker"]
+        turns_data = []
+        for turn, utterance in enumerate(sample["utterances"][1:-1], start=2):
+            # Prompts contains the possible meanings
+            # endings can be:
+            # - if speaker is patient: "yes" or "no" answers (in one of its variants)
+            # - if speaker is doctor: the question about the symptom
+            prompts, endings, true_ending_idx = dataset.create_prompts_from_past_utterances(
+                past_turns=sample["utterances"][:turn - 1],
+                current_turn=utterance,
             )
             all_logits = []
-            unique_utterances = world["patient_utterances"] if utterance["speaker"] == "patient" else world["doctor_utterances"]
             for prompt in prompts:
-                logits = model.predict(prompt, unique_utterances)
+                logits = llm.predict(prompt, endings)
                 all_logits.append(logits)
             all_logits = np.vstack(all_logits).T # L(u,m)
 
-            lexicon_data.append({
-                "sample_id": sample["dialog_id"],
+            turns_data.append({
                 "turn": turn,
-                "utt": utterance["content"],
                 "speaker": utterance["speaker"],
-                "lexicon": all_logits,
+                "speaker_logprob": all_logits,
+                "true_utt": true_ending_idx,
             })
-        category_prompt, endings = dataset.create_category_prompt_from_dialog(sample["utterances"], sample["symptoms"])
 
-        category_dist = model.predict(category_prompt, endings)
-        categories_data.append({
-            "training_sample_id": i,
-            "sample_id": sample["dialog_id"],
-            "category_dist": category_dist,
+        category_prompt, endings = dataset.create_category_prompt_from_dialog(sample["utterances"], sample["symptoms"])
+        category_distribution = llm.predict(category_prompt, endings)
+        predictions.add({
+            "idx": sample["idx"],
             "disease": sample["disease"],
+            "category_distribution": category_distribution,
+            "turns": turns_data,
         })
-    
-    with open(output_dir / "lexicon_data.pkl", "wb") as f:
-        pickle.dump(lexicon_data, f)
-    with open(output_dir / "categories_data.pkl", "wb") as f:
-        pickle.dump(categories_data, f)
-    os.remove(output_dir / "lexicon_data_part.pkl")
-    os.remove(output_dir / "categories_data_part.pkl")
-    logger.info("Finished running model")
 
 
 def check_iter_args(alpha, max_depth, tolerance):
@@ -166,17 +131,14 @@ def run_rsa(models, alpha, max_depth, tolerance, output_dir: Path, logger: loggi
     world = dataset.world
 
     # Load the data
-    with open(output_dir / "lexicon_data_part.pkl", "rb") as f:
-        df_lex = pd.DataFrame(pickle.load(f)).set_index(["sample_id", "turn"]).sort_index()
-    with open(output_dir / "categories_data_part.pkl", "rb") as f:
-        df_cat = pd.DataFrame(pickle.load(f)).set_index(["sample_id"]).sort_index()
+    predictions = Predictions(output_dir / "predictions")
    
     results = []
     alpha, max_depth, tolerance = check_iter_args(alpha, max_depth, tolerance)
     for model_name in models:
         model = init_model(
             model_name,
-            meanings_A=world["symptoms"],
+            meanings_A=world["diseases"],
             meanings_B=["You are a doctor"],
             categories=world["diseases"],
             prior=world["prior"],
@@ -187,27 +149,32 @@ def run_rsa(models, alpha, max_depth, tolerance, output_dir: Path, logger: loggi
         logger.info(f"Running {model_name} with alpha={alpha}, max_depth={max_depth}, tolerance={tolerance}")
         # Run the model for each sample
         for i, sample in enumerate(dataset.iter_samples()):
-            if sample["dialog_id"] not in df_lex.index.get_level_values(0):
+            if sample not in predictions:
                 continue
-            model.reset(sample["symptoms_id"], "You are a doctor")
-            for (_, turn), (utt, speaker, log_lexicon) in df_lex.loc[(sample["dialog_id"], slice(None)), :].iterrows():
+            sample_data = predictions[sample["idx"]]
+            model.reset(world["diseases"][sample["disease"]], "You are a doctor")
+            for turn_data in sample_data["turns"]:
+                turn = turn_data["turn"]
+                speaker = turn_data["speaker"]
+                speaker_logprob = turn_data["speaker_logprob"]
+                true_utt = world[f"{speaker}_utterances"][turn_data["true_utt"]]
                 utterances = world[f"{speaker}_utterances"]
-                model.run_turn(utt, log_lexicon=log_lexicon, utterances=utterances, speaker="A" if speaker == "patient" else "B")
+                model.run_turn(true_utt, log_lexicon=speaker_logprob, utterances=utterances, speaker="A" if speaker == "patient" else "B")
                 results.append({
                     "model_name": model_name,
                     "alpha": alpha,
-                    "sample_id": sample["dialog_id"],
-                    "meaning_A": sample["symptoms_id"],
+                    "sample_id": sample["idx"],
+                    "meaning_A": world["diseases"][sample["disease"]],
                     "meaning_B": "You are a doctor",
                     "turn": turn,
                     "sampled_utt": model.sample_utterance("A" if speaker == "patient" else "B"),
-                    "true_utt": utt,
-                    "true_utt_idx": utterances.index(utt),
+                    "true_utt": true_utt,
+                    "true_utt_idx": utterances.index(true_utt),
                     "speaker": speaker,
                     "speaker_dist": model.past_speaker_dist[-1],
                     "lexicon_dist": model.past_lexicon_dist[-1],
-                    "category_idx": world["diseases"].index(df_cat.loc[sample["dialog_id"], "disease"]),
-                    "category_distribution": df_cat.loc[sample["dialog_id"], "category_dist"],
+                    "category_idx": sample["disease"],
+                    "category_distribution": sample_data["category_distribution"],
                     "listener_dist": model.get_category_distribution(),
                     "belief_A": model.belief_A if model_name == "crsa" else None,
                     "belief_B": model.belief_B if model_name == "crsa" else None,
@@ -223,46 +190,33 @@ def compute_results(results, models, alpha, output_dir: Path):
 
     results_ce = []
     for model_name in models:
-        speaker_logprobs = []
-        lexicon_logprobs = []
+        speaker_ppl = []
         category_logprobs = []
         category_accuracy = []
-        lexicon_cat_logprobs = []
-        lexicon_accuracy = []
         dialogs = results[(results["alpha"] == alpha) & (results["model_name"] == model_name)].sort_values(["sample_id","turn"])
         for dialog_id, dialog in dialogs.groupby("sample_id"):
+            dialog = dialog.sort_values("turn")
+            logprobs = []
             for i, row in dialog.iterrows():
-                speaker_logprobs.append(-np.log(row["speaker_dist"][row["true_utt_idx"]]))
-                lexicon_logprobs.append(-np.log(row["lexicon_dist"] + ZERO)[row["true_utt_idx"]])
-                category_logprobs.append(-np.log(row["listener_dist"])[row["category_idx"]])
-                argmax_classes = np.arange(len(row["listener_dist"]))[row["listener_dist"] == np.max(row["listener_dist"])]
-                argmax = np.random.permutation(argmax_classes)[0] if len(argmax_classes) > 1 else argmax_classes[0]    
-                category_accuracy.append(argmax == row["category_idx"])
-                lexicon_cat_logprobs.append(-log_softmax(row["category_distribution"])[row["category_idx"]])
-                lexicon_accuracy.append(np.argmax(row["category_distribution"]) == row["category_idx"])
+                logprobs.append(-np.log(row["speaker_dist"][row["true_utt_idx"]]))
+            category_logprobs.append(-np.log(row["listener_dist"])[row["category_idx"]])
+            argmax_classes = np.arange(len(row["listener_dist"]))[row["listener_dist"] == np.max(row["listener_dist"])]
+            argmax = np.random.permutation(argmax_classes)[0] if len(argmax_classes) > 1 else argmax_classes[0]    
+            category_accuracy.append(argmax == row["category_idx"])
+            category_accuracy.append(np.argmax(row["listener_dist"]) == row["category_idx"])
+            speaker_ppl.append(np.exp(np.mean(logprobs)))
         
-        ce_speaker = np.mean(speaker_logprobs)
-        ce_lexicon = np.mean(lexicon_logprobs)
-        ce_category = np.mean(category_logprobs)
+        speaker_ppl_mean = np.mean(speaker_ppl)
         acc_category = np.mean(category_accuracy)
-        ce_lexicon_cat = np.mean(lexicon_cat_logprobs)
-        acc_lexicon = np.mean(lexicon_accuracy)
 
         results_ce.append({
             "model_name": model_name,
-            "$H_S$": ce_speaker,
-            "$H_L$": ce_category,
+            "Speaker PPL": speaker_ppl_mean,
             "Task success rate": acc_category,
         })               
-    results_ce.append({
-        "model_name": "Literal",
-        "$H_S$": ce_lexicon,
-        "$H_L$": ce_lexicon_cat,
-        "Task success rate": acc_lexicon,
-    })
     results_ce = pd.DataFrame(results_ce)
     results_ce = results_ce.set_index("model_name")
-    results_ce.to_latex(output_dir / f"results_ce_{alpha}.tex", index=True, float_format="%.2f")
+    results_ce.to_latex(output_dir / f"results_ce_{alpha}.tex", index=True, float_format="%.3f")
 
 
 
@@ -272,7 +226,6 @@ def main(
     base_model: str = "meta-llama/Llama-3.2-1B-Instruct",
     models: List = ["crsa", "rsa", "literal"],
     seed: int = None,
-    save_every: int = 100,
     alpha: float = 1.0,
     max_depth: int = float("inf"),
     tolerance: float = 0.01,
@@ -283,12 +236,11 @@ def main(
     # Set random seed for reproducibility
     np.random.seed(seed)
 
-    # run_llm(base_model, save_every, output_dir, logger)
+    run_llm(base_model, output_dir, logger)
 
     results = run_rsa(models, alpha=alpha, max_depth=max_depth, tolerance=tolerance, output_dir=output_dir, logger=logger)
     
     compute_results(results, models, alpha, output_dir)
-    # plot_turns(results, models, output_dir)
     
 
 
@@ -310,7 +262,6 @@ def parse_args():
     parser.add_argument("--alpha", type=float, help="Alpha to run", default=1.0)
     parser.add_argument("--max_depth", type=int_or_inf, help="Max depth to run CRSA with", default=None)
     parser.add_argument("--tolerance", type=float, help="Tolerance to run", default=0.01)
-    parser.add_argument("--save_every", type=int, help="Save every N samples", default=100)
     parser.add_argument("--seed", type=int, help="Seed to run", default=None)
     args = parser.parse_args()
 
@@ -325,7 +276,6 @@ def parse_args():
     main_args = {
         "base_model": args.base_model,
         "models": args.models,
-        "save_every": args.save_every,
         "alpha": args.alpha,
         "max_depth": args.max_depth,
         "tolerance": args.tolerance,
