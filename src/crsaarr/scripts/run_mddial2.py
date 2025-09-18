@@ -202,48 +202,69 @@ def compute_results(results, models, alpha, output_dir: Path):
 
     results_ce = []
     for model_name in models:
-        speaker_logprobs = []
-        lexicon_logprobs = []
+        # speaker_logprobs = []
+        speaker_ppl = []
+        # lexicon_logprobs = []
         category_logprobs = []
         category_accuracy = []
-        lexicon_cat_logprobs = []
-        lexicon_accuracy = []
+        # lexicon_cat_logprobs = []
+        # lexicon_accuracy = []
+        # yes_no_accuracy = []
+        # yes_no_logprobs = []
+        # symptom_accuracy = []
+        # symptom_logprobs = []
         dialogs = results[(results["alpha"] == alpha) & (results["model_name"] == model_name)].sort_values(["sample_id","turn"])
         for dialog_id, dialog in dialogs.groupby("sample_id"):
             dialog = dialog.sort_values("turn")
+            logprobs = []
             for i, row in dialog.iterrows():
-                speaker_logprobs.append(-np.log(row["speaker_dist"][row["true_utt_idx"]]))
-                lexicon_logprobs.append(-np.log(row["lexicon_dist"] + ZERO)[row["true_utt_idx"]])
+                logprobs.append(-np.log(row["speaker_dist"][row["true_utt_idx"]]))
+                # lexicon_logprobs.append(-np.log(row["lexicon_dist"] + ZERO)[row["true_utt_idx"]])
+                # if row["speaker"] == "patient":
+                #     yes_no_accuracy.append(row['true_utt_idx'] == np.argmax(row['speaker_dist']))
+                #     yes_no_logprobs.append(-np.log(row["speaker_dist"])[row["true_utt_idx"]])
+                # if row["speaker"] == "doctor":
+                #     symptom_accuracy.append(row['true_utt_idx'] == np.argmax(row['speaker_dist']))
+                #     symptom_logprobs.append(-np.log(row["speaker_dist"])[row["true_utt_idx"]])
             category_logprobs.append(-np.log(row["listener_dist"])[row["category_idx"]])
             argmax_classes = np.arange(len(row["listener_dist"]))[row["listener_dist"] == np.max(row["listener_dist"])]
             argmax = np.random.permutation(argmax_classes)[0] if len(argmax_classes) > 1 else argmax_classes[0]    
             category_accuracy.append(argmax == row["category_idx"])
             category_accuracy.append(np.argmax(row["listener_dist"]) == row["category_idx"])
-            lexicon_cat_logprobs.append(-log_softmax(row["category_distribution"])[row["category_idx"]])
-            lexicon_accuracy.append(np.argmax(row["category_distribution"]) == row["category_idx"])
+            speaker_ppl.append(np.exp(np.mean(logprobs)))
+            # lexicon_cat_logprobs.append(-log_softmax(row["category_distribution"])[row["category_idx"]])
+            # lexicon_accuracy.append(np.argmax(row["category_distribution"]) == row["category_idx"])
         
-        ce_speaker = np.mean(speaker_logprobs)
-        ce_lexicon = np.mean(lexicon_logprobs)
-        ce_category = np.mean(category_logprobs)
+        speaker_ppl_mean = np.mean(speaker_ppl)
+        # ce_lexicon = np.mean(lexicon_logprobs)
+        # ce_category = np.mean(category_logprobs)
         acc_category = np.mean(category_accuracy)
-        ce_lexicon_cat = np.mean(lexicon_cat_logprobs)
-        acc_lexicon = np.mean(lexicon_accuracy)
+        # ce_lexicon_cat = np.mean(lexicon_cat_logprobs)
+        # acc_lexicon = np.mean(lexicon_accuracy)
+        # acc_yes_no = np.mean(yes_no_accuracy)
+        # acc_symptom = np.mean(symptom_accuracy)
+        # ce_yes_no = np.mean(yes_no_logprobs)
+        # ce_symptom = np.mean(symptom_logprobs)
 
         results_ce.append({
             "model_name": model_name,
-            "$H_S$": ce_speaker,
-            "$H_L$": ce_category,
+            "Speaker PPL": speaker_ppl_mean,
+            # "yes/no acc": acc_yes_no,
+            # "$H_{yes/no}$": ce_yes_no,
+            # "symptom acc": acc_symptom,
+            # "$H_{symptom}$": ce_symptom,
+            # "$H_L$": ce_category,
             "Task success rate": acc_category,
         })               
-    results_ce.append({
-        "model_name": "Literal",
-        "$H_S$": ce_lexicon,
-        "$H_L$": ce_lexicon_cat,
-        "Task success rate": acc_lexicon,
-    })
+    # results_ce.append({
+    #     "model_name": "Literal",
+    #     "$H_S$": ce_lexicon,
+    #     "$H_L$": ce_lexicon_cat,
+    #     "Task success rate": acc_lexicon,
+    # })
     results_ce = pd.DataFrame(results_ce)
     results_ce = results_ce.set_index("model_name")
-    results_ce.to_latex(output_dir / f"results_ce_{alpha}.tex", index=True, float_format="%.2f")
+    results_ce.to_latex(output_dir / f"results_ce_{alpha}.tex", index=True, float_format="%.3f")
 
 
 
@@ -263,9 +284,10 @@ def main(
     # Set random seed for reproducibility
     np.random.seed(seed)
 
-    run_llm(base_model, output_dir, logger)
+    # run_llm(base_model, output_dir, logger)
 
     results = run_rsa(models, alpha=alpha, max_depth=max_depth, tolerance=tolerance, output_dir=output_dir, logger=logger)
+    # results = pd.read_pickle(output_dir / "all_results.pkl")
     
     compute_results(results, models, alpha, output_dir)
     

@@ -87,19 +87,20 @@ class Speaker:
 
     def compute_literal(self):
         # Compute the conditional priors 
-        prior = self.prior.copy()
-        prior[prior <= ZERO] = ZERO
-        prior_ab = prior.sum(axis=2) # P(a,b)
-        prior_a = prior_ab.sum(axis=1, keepdims=True) # P(a)
-        prior_ab[prior_ab <= ZERO] = ZERO
-        prior_a[prior_a <= ZERO] = ZERO
-        prior_b_given_a = prior_ab / prior_a # P(b|a)
+        # prior = self.prior.copy()
+        # prior[prior <= ZERO] = ZERO
+        # prior_ab = prior.sum(axis=2) # P(a,b)
+        # prior_a = prior_ab.sum(axis=1, keepdims=True) # P(a)
+        # prior_ab[prior_ab <= ZERO] = ZERO
+        # prior_a[prior_a <= ZERO] = ZERO
+        # prior_b_given_a = prior_ab / prior_a # P(b|a)
 
         mask = self.lexicon > 0
         log_lexicon = np.zeros_like(self.lexicon, dtype=float)
         log_lexicon[mask] = np.log(self.lexicon[mask])
         log_lexicon[~mask] = -INF
-        literal_speaker = softmax(self.alpha * np.einsum("ub,ab->au",log_lexicon - self.costs.reshape(-1,1), prior_b_given_a), axis=1)
+        literal_speaker = softmax(log_lexicon.T, axis=1)
+        # literal_speaker = softmax(self.alpha * np.einsum("ub,ab->au",log_lexicon - self.costs.reshape(-1,1), prior_b_given_a), axis=1)
         self.history.append(literal_speaker)        
         
     @property
@@ -133,7 +134,7 @@ class LiteralTurn:
     def run(self):
         # Run the model for the given number of iterations
         self.listener.compute_literal()
-        # self.speaker.compute_literal()
+        self.speaker.compute_literal()
 
 
 
@@ -154,12 +155,11 @@ class LLMLiteral:
         self.past_lexicon_dist = []
 
     def sample_utterance(self, speaker):
-        # meaning_S = self.round_meaning_A if speaker == "A" else self.round_meaning_B
-        # speaker = self.turns_history[-1].speaker.as_df
-        # utt_dist = speaker.loc[meaning_S,:].squeeze()
-        # new_utt = utt_dist[utt_dist == utt_dist.max()].index[0]
-        # return new_utt
-        return speaker
+        meaning_S = self.round_meaning_A if speaker == "A" else self.round_meaning_B
+        speaker = self.turns_history[-1].speaker.as_df
+        utt_dist = speaker.loc[meaning_S,:].squeeze()
+        new_utt = utt_dist[utt_dist == utt_dist.max()].index[0]
+        return new_utt
 
     def get_category_distribution(self):
         return np.ones(len(self.categories), dtype=float) / len(self.categories)
@@ -202,4 +202,5 @@ class LLMLiteral:
         # get speaker distribution
         self.past_utterances.append({"utterance": ground_truth_utt, "speaker": speaker})
         # self.past_speaker_dist.append(self.turns_history[-1].speaker.as_df.loc[meaning_S,:].values.reshape(-1))
-        self.past_speaker_dist.append(np.ones(len(utterances), dtype=float) / len(utterances))
+        # self.past_speaker_dist.append(np.ones(len(utterances), dtype=float) / len(utterances))
+        self.past_speaker_dist.append(lexicon[:, meaning_S_idx].copy())
