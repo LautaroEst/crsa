@@ -101,17 +101,6 @@ class MDDialDataset:
         return template, symptom
     
     def _init_prior(self, dialogs, diseases, symptoms, disease2symptoms):
-        # diag = np.diag(np.array([counts[d] for d in diseases]) / len(dialogs))
-        # # prior = np.diag(np.array([counts[d] for d in diseases]) / len(dialogs)) + np.abs(np.random.randn(len(diseases), len(diseases)) * 1e-4)
-        # # prior = np.eye(len(diseases))
-        # # prior = np.tile(np.array([counts[d] for d in diseases]) / len(dialogs), (len(diseases),1)).T
-        # # prior = np.tile(np.array([counts[d] for d in diseases]) / len(dialogs), (len(diseases),1))
-        # sym = disease2symptoms_matrix.astype(float) @ disease2symptoms_matrix.astype(float).T
-        # sym[np.arange(len(diseases)), np.arange(len(diseases))] = 0.0  # remove diagonal
-        # sym = sym / sym.sum()
-        # prior = diag + sym
-        # prior = prior / np.sum(prior)
-        # prior = np.expand_dims(prior, axis=1)
         
         prior = np.zeros((len(diseases), 1, len(diseases)), dtype=float)
         symptom2disease = {s_idx: [d_idx for d_idx, d in enumerate(diseases) if disease2symptoms[d][s_idx]] for s_idx, symptom in enumerate(symptoms)}
